@@ -55,6 +55,21 @@ $posts = thermodul_posts_data();
         </div>
     </section>
 
+    <section class="td-section td-section-soft td-about-bridge" id="par-thermodul">
+        <div class="td-container">
+            <div class="row g-5 align-items-center">
+                <div class="col-lg-5">
+                    <span class="td-eyebrow"><?php echo esc_html(thermodul_i18n('Par THERMODUL','About THERMODUL','О THERMODUL','Apie THERMODUL','THERMODUList')); ?></span>
+                    <h2 class="td-section-title"><?php echo esc_html(thermodul_i18n('Pārbaudīts grīdlīstes apkures risinājums','A proven baseboard heating solution','Проверенное решение плинтусного отопления','Patikrintas grindjuosčių šildymo sprendimas','Tõestatud põrandaliistukütte lahendus')); ?></h2>
+                </div>
+                <div class="col-lg-7">
+                    <p><?php echo esc_html(thermodul_i18n('THERMODUL Baltijā piedāvā AQUADOCK BALTIJA SIA. Sistēma paredzēta jaunbūvēm, renovācijām un radiatoru nomaiņai, un tā ir pieejama ūdens, elektriskā, duālā un paaugstinātas jaudas konfigurācijās.','THERMODUL is represented in the Baltics by AQUADOCK BALTIJA SIA. The system is designed for new builds, renovations and radiator replacement, with water, electric, dual and higher-output configurations.','THERMODUL в странах Балтии представляет AQUADOCK BALTIJA SIA. Система подходит для новостроек, реконструкции и замены радиаторов; доступны водяные, электрические, дуальные и усиленные варианты.','Baltijos šalyse THERMODUL atstovauja AQUADOCK BALTIJA SIA. Sistema skirta naujai statybai, renovacijai ir radiatorių keitimui; galimi vandens, elektriniai, dualiniai ir didesnės galios variantai.','Baltikumis esindab THERMODULit AQUADOCK BALTIJA SIA. Süsteem sobib uusehituseks, renoveerimiseks ja radiaatorite asendamiseks ning on saadaval vee-, elektri-, duaal- ja suurema võimsusega lahendustes.')); ?></p>
+                    <p><a class="td-link" href="<?php echo esc_url(thermodul_legacy_page_url('par-uznemumu', 'kapec')); ?>"><?php echo esc_html(thermodul_i18n('Par uzņēmumu un sistēmu','About the company and system','О компании и системе','Apie įmonę ir sistemą','Ettevõttest ja süsteemist')); ?> →</a></p>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <section class="td-section td-how" id="ka-tas-darbojas">
         <div class="td-container">
             <div class="row g-5 align-items-center">
@@ -103,12 +118,17 @@ $posts = thermodul_posts_data();
                 <div class="col-lg-5">
                     <span class="td-eyebrow"><?php echo esc_html(thermodul_i18n('Drošība un standarti','Safety and standards','Безопасность и стандарты','Sauga ir standartai','Ohutus ja standardid')); ?></span>
                     <h2 class="td-section-title"><?php echo esc_html($t['cert']); ?></h2>
-                    <p><?php echo esc_html(thermodul_i18n('Pārbaudīta kvalitāte un apstiprināta efektivitāte. THERMODUL produkts atbilst Eiropas kvalitātes un drošības standartiem.','Tested quality and confirmed efficiency. THERMODUL complies with European quality and safety standards.','Проверенное качество и подтверждённая эффективность. THERMODUL соответствует европейским стандартам качества и безопасности.','Patikrinta kokybė ir patvirtintas efektyvumas. THERMODUL atitinka Europos kokybės ir saugos standartus.','Kontrollitud kvaliteet ja kinnitatud tõhusus. THERMODUL vastab Euroopa kvaliteedi- ja ohutusstandarditele.')); ?></p>
-                    <ul class="td-check-list"><li>CE</li><li>RoHS</li><li>EN442</li><li>IP20</li></ul>
+                    <p><?php echo esc_html(thermodul_i18n('Pašreizējā THERMODUL vietne dokumentē atbilstību EN442 un sertifikāciju saskaņā ar Eiropas apkures efektivitātes normām.','The current THERMODUL site documents EN442 compliance and certification under European heating-efficiency standards.','Текущий сайт THERMODUL документирует соответствие EN442 и сертификацию по европейским нормам эффективности отопления.','Dabartinėje THERMODUL svetainėje dokumentuojama atitiktis EN442 ir sertifikavimas pagal Europos šildymo efektyvumo normas.','Praegune THERMODULi veebileht dokumenteerib EN442 vastavust ja sertifitseerimist Euroopa kütte tõhususe normide järgi.')); ?></p>
+                    <ul class="td-check-list"><li>EN442</li><li><?php echo esc_html(thermodul_i18n('Eiropas apkures efektivitātes normas','European heating-efficiency standards','Европейские нормы эффективности отопления','Europos šildymo efektyvumo normos','Euroopa kütte tõhususe normid')); ?></li><li><?php echo esc_html(thermodul_i18n('Ekoloģiskās būvniecības principi','Ecological building principles','Принципы экологичного строительства','Ekologiškos statybos principai','Ökoloogilise ehituse põhimõtted')); ?></li><li>Plan Expo Fair 2006</li></ul>
                 </div>
                 <div class="col-lg-7">
                     <div class="row g-3">
-                        <?php foreach (array('CE'=>'ES direktīvas','RoHS'=>'Videi draudzīgi','EN442'=>'Siltuma atdeve','IP20'=>'Drošības klase') as $cert=>$text) : ?>
+                        <?php foreach (array(
+                            'EN442'=>thermodul_i18n('Siltuma atdeves prasības','Heat-output requirements','Требования к теплоотдаче','Šilumos atidavimo reikalavimai','Soojusvõimsuse nõuded'),
+                            'EU'=>thermodul_i18n('Apkures efektivitātes normas','Heating-efficiency standards','Нормы эффективности отопления','Šildymo efektyvumo normos','Kütte tõhususe normid'),
+                            'ECO'=>thermodul_i18n('Ekoloģiskās būvniecības principi','Ecological building principles','Экологичное строительство','Ekologiškos statybos principai','Ökoloogilise ehituse põhimõtted'),
+                            '2006'=>thermodul_i18n('Plan Expo Fair, Dublina','Plan Expo Fair, Dublin','Plan Expo Fair, Дублин','Plan Expo Fair, Dublinas','Plan Expo Fair, Dublin')
+                        ) as $cert=>$text) : ?>
                             <div class="col-6 col-md-3"><button class="td-card td-cert-card td-open-card" type="button" data-modal-title="<?php echo esc_attr($cert); ?>" data-modal-body="<?php echo esc_attr($text); ?>"><strong><?php echo esc_html($cert); ?></strong><span><?php echo esc_html($text); ?></span></button></div>
                         <?php endforeach; ?>
                     </div>
@@ -126,7 +146,7 @@ $posts = thermodul_posts_data();
                 <?php foreach ($posts as $post) : ?>
                     <div class="col-md-6 col-xl-4">
                         <article class="td-post-card">
-                            <button type="button" class="td-post-trigger" data-post-title="<?php echo esc_attr($post['title']); ?>" data-post-body="<?php echo esc_attr($post['body']); ?>" data-post-image="<?php echo esc_url($post['image']); ?>">
+                            <button type="button" class="td-post-trigger" data-post-title="<?php echo esc_attr($post['title']); ?>" data-post-body="<?php echo esc_attr($post['body']); ?>" data-post-image="<?php echo esc_url(!empty($post['modal_image']) ? $post['modal_image'] : $post['image']); ?>">
                                 <?php echo thermodul_picture($post['image'], $post['title'], 'td-post-img', 'lazy'); ?>
                                 <span class="td-post-content">
                                     <strong><?php echo esc_html($post['title']); ?></strong>

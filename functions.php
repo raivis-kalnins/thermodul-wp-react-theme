@@ -1,7 +1,7 @@
 <?php
 if (!defined('ABSPATH')) { exit; }
 
-define('THERMODUL_THEME_VERSION', '3.7.0');
+define('THERMODUL_THEME_VERSION', '3.10.4');
 
 function thermodul_setup() {
     load_theme_textdomain('thermodul', get_template_directory() . '/languages');
@@ -19,8 +19,47 @@ add_action('after_setup_theme', 'thermodul_setup');
 
 function thermodul_asset_ver($path) { $file = get_template_directory() . '/' . ltrim($path, '/'); return file_exists($file) ? filemtime($file) : THERMODUL_THEME_VERSION; }
 
+
+/* v3.10.2: small theme data cache. Uses Docket Cache/object cache when available,
+ * with transient fallback on hosts without a persistent object cache. */
+function thermodul_performance_enabled() { return (bool) get_option('thermodul_performance_mode', 1); }
+function thermodul_cache_ttl() { return max(300, min(86400, (int) get_option('thermodul_cache_ttl', 3600))); }
+function thermodul_cache_version() { return max(1, (int) get_option('thermodul_cache_version', 1)); }
+function thermodul_cache_key($key) {
+    $lang = function_exists('thermodul_current_lang') ? thermodul_current_lang() : 'lv';
+    return 'v' . thermodul_cache_version() . ':' . $lang . ':' . sanitize_key($key);
+}
+function thermodul_cached($key, $callback, $ttl = null) {
+    if (!thermodul_performance_enabled()) { return call_user_func($callback); }
+    $cache_key = thermodul_cache_key($key);
+    $found = false;
+    $value = wp_cache_get($cache_key, 'thermodul', false, $found);
+    if ($found) { return $value; }
+    $transient_key = 'tdc_' . md5($cache_key);
+    if (!wp_using_ext_object_cache()) {
+        $value = get_transient($transient_key);
+        if ($value !== false) { wp_cache_set($cache_key, $value, 'thermodul', (int) ($ttl ?: thermodul_cache_ttl())); return $value; }
+    }
+    $value = call_user_func($callback);
+    $ttl = (int) ($ttl ?: thermodul_cache_ttl());
+    wp_cache_set($cache_key, $value, 'thermodul', $ttl);
+    if (!wp_using_ext_object_cache()) { set_transient($transient_key, $value, $ttl); }
+    return $value;
+}
+function thermodul_clear_theme_cache() {
+    update_option('thermodul_cache_version', thermodul_cache_version() + 1, false);
+}
+function thermodul_clear_cache_on_save($post_id) {
+    if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) { return; }
+    thermodul_clear_theme_cache();
+}
+add_action('save_post', 'thermodul_clear_cache_on_save', 30);
+
 function thermodul_scripts() {
-    if (!wp_style_is('wp-bbuilder-bootstrap', 'enqueued') && !wp_style_is('bootstrap', 'enqueued')) {
+    /* On normal content pages use an already-loaded WP BBuilder Bootstrap grid if
+     * available. The static homepage uses the tiny grid bundled in this theme. */
+    $has_grid = wp_style_is('wpbb-bootstrap-core', 'enqueued') || wp_style_is('wpbb-bootstrap-grid', 'enqueued') || wp_style_is('wpbb-bootstrap-full', 'enqueued') || wp_style_is('wp-bbuilder-bootstrap', 'enqueued') || wp_style_is('bootstrap', 'enqueued');
+    if (!$has_grid && !is_front_page() && !get_query_var('thermodul_onepage')) {
         wp_enqueue_style('thermodul-bootstrap-grid', 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap-grid.min.css', array(), '5.3.3');
     }
     $theme_css = file_exists(get_template_directory() . '/assets/css/theme.min.css') ? get_template_directory_uri() . '/assets/css/theme.min.css' : get_stylesheet_uri();
@@ -29,12 +68,16 @@ function thermodul_scripts() {
     wp_enqueue_style('thermodul-wpbb', get_template_directory_uri() . '/assets/css/wpbb-compat.css', array('thermodul-style'), thermodul_asset_ver('assets/css/wpbb-compat.css'));
     $theme_js = file_exists(get_template_directory() . '/assets/js/theme.min.js') ? 'assets/js/theme.min.js' : 'assets/js/theme.js';
     wp_enqueue_script('thermodul-theme', get_template_directory_uri() . '/' . $theme_js, array(), thermodul_asset_ver($theme_js), true);
+    if (function_exists('wp_script_add_data')) { wp_script_add_data('thermodul-theme', 'strategy', 'defer'); }
     wp_localize_script('thermodul-theme', 'thermodulTheme', array(
         'ajaxUrl' => admin_url('admin-ajax.php'),
         'searchNonce' => wp_create_nonce('thermodul_search'),
         'formNonce' => wp_create_nonce('thermodul_contact'),
         'galleryNonce' => wp_create_nonce('thermodul_gallery'),
         'lang' => function_exists('thermodul_current_lang') ? thermodul_current_lang() : 'lv',
+        'hcaptchaEnabled' => function_exists('thermodul_hcaptcha_ready') ? thermodul_hcaptcha_ready() : false,
+        'hcaptchaSiteKey' => function_exists('thermodul_hcaptcha_site_key') ? thermodul_hcaptcha_site_key() : '',
+        'hcaptchaLang' => function_exists('thermodul_current_lang') ? thermodul_current_lang() : 'lv',
         'labels' => array(
             'searching' => function_exists('thermodul_i18n') ? thermodul_i18n('Meklē...', 'Searching...', 'Идет поиск...', 'Ieškoma...', 'Otsin...') : 'Meklē...',
             'noResults' => function_exists('thermodul_i18n') ? thermodul_i18n('Nekas netika atrasts.', 'No results found.', 'Ничего не найдено.', 'Nieko nerasta.', 'Tulemusi ei leitud.') : 'Nekas netika atrasts.',
@@ -42,21 +85,13 @@ function thermodul_scripts() {
             'loading' => function_exists('thermodul_i18n') ? thermodul_i18n('Ielādē...', 'Loading...', 'Загрузка...', 'Įkeliama...', 'Laadin...') : 'Ielādē...',
             'formError' => function_exists('thermodul_i18n') ? thermodul_i18n('Neizdevās nosūtīt formu. Lūdzu, mēģiniet vēlreiz.', 'Unable to send the form. Please try again.', 'Не удалось отправить форму. Попробуйте еще раз.', 'Nepavyko išsiųsti formos. Bandykite dar kartą.', 'Vormi saatmine ebaõnnestus. Palun proovige uuesti.') : 'Neizdevās nosūtīt formu.',
             'formRequired' => function_exists('thermodul_i18n') ? thermodul_i18n('Lūdzu, aizpildiet obligātos laukus.', 'Please fill in required fields.', 'Пожалуйста, заполните обязательные поля.', 'Užpildykite privalomus laukus.', 'Palun täitke kohustuslikud väljad.') : 'Lūdzu, aizpildiet obligātos laukus.',
+            'captchaRequired' => function_exists('thermodul_i18n') ? thermodul_i18n('Lūdzu, apstipriniet hCaptcha.', 'Please complete hCaptcha.', 'Пожалуйста, пройдите hCaptcha.', 'Užbaikite hCaptcha patikrą.', 'Palun läbige hCaptcha kontroll.') : 'Lūdzu, apstipriniet hCaptcha.',
         ),
         'localIndex' => function_exists('thermodul_local_search_index') ? thermodul_local_search_index() : array(),
     ));
-    if (function_exists('thermodul_hcaptcha_site_key') && thermodul_hcaptcha_site_key()) {
-        $hc_lang = function_exists('thermodul_current_lang') ? thermodul_current_lang() : 'lv';
-        if (wp_script_is('hcaptcha-api', 'registered') || wp_script_is('hcaptcha-api', 'enqueued')) {
-            wp_dequeue_script('hcaptcha-api');
-            wp_deregister_script('hcaptcha-api');
-        }
-        wp_enqueue_script('hcaptcha-api', 'https://js.hcaptcha.com/1/api.js?hl=' . rawurlencode($hc_lang), array(), null, true);
-    }
-    if (is_front_page()) {
-        wp_enqueue_script('thermodul-react-home', get_template_directory_uri() . '/assets/js/headless-home.js', array('wp-element'), thermodul_asset_ver('assets/js/headless-home.js'), true);
-        wp_localize_script('thermodul-react-home', 'thermodulHomeData', thermodul_home_data());
-    }
+    /* hCaptcha is lazy-loaded by theme.js only when the contact form approaches
+     * the viewport. The old headless React bootstrap was also removed: the
+     * homepage is server-rendered and data-static-rendered=true. */
 }
 add_action('wp_enqueue_scripts', 'thermodul_scripts', 99);
 
@@ -137,6 +172,7 @@ function thermodul_anchor_map() {
     );
 }
 function thermodul_language_rewrites() {
+    if (function_exists('pll_languages_list')) { return; }
     add_rewrite_rule('^(en|ru|lt|et)/?$', 'index.php?thermodul_lang=$matches[1]&thermodul_onepage=1', 'top');
 }
 add_action('init', 'thermodul_language_rewrites');
@@ -148,6 +184,7 @@ function thermodul_onepage_template($template) {
 }
 add_filter('template_include', 'thermodul_onepage_template', 99);
 function thermodul_redirect_old_pages_to_onepage() {
+    if (!get_option('thermodul_redirect_legacy_pages', 0)) { return; }
     if (is_admin() || wp_doing_ajax()) { return; }
     $uri = isset($_SERVER['REQUEST_URI']) ? trim(parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH), '/') : '';
     $parts = $uri === '' ? array() : explode('/', $uri);
@@ -165,23 +202,45 @@ add_action('template_redirect', 'thermodul_redirect_old_pages_to_onepage', 1);
 function thermodul_gallery_raw_paths() {
     $make = function($folder, $prefix, $count) { $arr = array(); for ($i=1; $i <= $count; $i++) { $arr[] = $folder . '/' . $prefix . $i . '.jpg'; } return $arr; };
     return array(
-        'Dzīvojamā istaba' => $make('dzivojama-istaba','dz',10),
-        'Kafejnīcas un restorāni' => $make('kafejnicas-restorani','kr',8),
-        'Muzeji' => $make('muzejs','mu',8),
-        'Ofisi un veselības iestādes' => $make('ofisi-veselibas-iestades','of',9),
-        'Palīgtelpas' => $make('paligtelpas','p',9),
-        'Reliģiskās telpas' => $make('religiskas-iestades','rel',6),
-        'Skolas & bērnu dārzi' => $make('skolas-bernudarzi','sk',8),
-        'Veikali' => $make('veikali','v',6),
+        thermodul_i18n('Dzīvojamā istaba','Living rooms','Жилые комнаты','Gyvenamieji kambariai','Elutoad') => $make('dzivojama-istaba','dz',10),
+        thermodul_i18n('Kafejnīcas un restorāni','Cafes and restaurants','Кафе и рестораны','Kavinės ir restoranai','Kohvikud ja restoranid') => $make('kafejnicas-restorani','kr',8),
+        thermodul_i18n('Muzeji','Museums','Музеи','Muziejai','Muuseumid') => $make('muzejs','mu',8),
+        thermodul_i18n('Ofisi un veselības iestādes','Offices and healthcare','Офисы и медучреждения','Biurai ir sveikatos įstaigos','Kontorid ja tervishoid') => $make('ofisi-veselibas-iestades','of',9),
+        thermodul_i18n('Palīgtelpas','Utility rooms','Подсобные помещения','Pagalbinės patalpos','Abiruumid') => $make('paligtelpas','p',9),
+        thermodul_i18n('Reliģiskās telpas','Religious buildings','Религиозные помещения','Religinės patalpos','Pühakojad') => $make('religiskas-iestades','rel',6),
+        thermodul_i18n('Skolas & bērnu dārzi','Schools & kindergartens','Школы и детские сады','Mokyklos ir darželiai','Koolid ja lasteaiad') => $make('skolas-bernudarzi','sk',8),
+        thermodul_i18n('Veikali','Shops','Магазины','Parduotuvės','Kauplused') => $make('veikali','v',6),
     );
 }
 function thermodul_upload_img($path) { return content_url('uploads/thermodul-demo/' . ltrim($path, '/')); }
+function thermodul_image_dimensions($src) {
+    static $memo = array();
+    if (!$src) { return array(); }
+    if (isset($memo[$src])) { return $memo[$src]; }
+    $file = '';
+    $theme_url = get_template_directory_uri();
+    if (strpos($src, $theme_url) === 0) {
+        $file = get_template_directory() . '/' . ltrim(str_replace($theme_url, '', $src), '/');
+    } else {
+        $uploads = wp_get_upload_dir();
+        if (!empty($uploads['baseurl']) && strpos($src, $uploads['baseurl']) === 0) {
+            $file = trailingslashit($uploads['basedir']) . ltrim(str_replace($uploads['baseurl'], '', $src), '/');
+        }
+    }
+    if ($file && file_exists($file)) {
+        $size = @getimagesize($file);
+        if ($size && !empty($size[0]) && !empty($size[1])) { return $memo[$src] = array((int)$size[0], (int)$size[1]); }
+    }
+    return $memo[$src] = array();
+}
 function thermodul_picture($src, $alt = '', $class = '', $loading = 'lazy', $extra = '') {
     $avif = function_exists('thermodul_avif_url_for') ? thermodul_avif_url_for($src) : '';
     $cls = $class ? ' class="' . esc_attr($class) . '"' : '';
+    $dims = thermodul_image_dimensions($src);
+    $dim_attrs = !empty($dims) ? ' width="'.esc_attr($dims[0]).'" height="'.esc_attr($dims[1]).'"' : '';
     $html = '<picture>';
     if ($avif && $avif !== $src) { $html .= '<source srcset="' . esc_url($avif) . '" type="image/avif">'; }
-    $html .= '<img' . $cls . ' src="' . esc_url($src) . '" alt="' . esc_attr($alt) . '" loading="' . esc_attr($loading) . '" decoding="async" ' . $extra . '>';
+    $html .= '<img' . $cls . ' src="' . esc_url($src) . '" alt="' . esc_attr($alt) . '" loading="' . esc_attr($loading) . '" decoding="async"' . $dim_attrs . ' ' . $extra . '>';
     $html .= '</picture>';
     return $html;
 }
@@ -215,6 +274,10 @@ function thermodul_gallery_card($item, $meta = '') {
 
 function thermodul_model_texts($key) {
     $texts = array(
+        'udens-modelis' => array(
+            'meta' => thermodul_i18n('Augstums: 13,7 cm · Dziļums: 2,9 cm','Height: 13.7 cm · Depth: 2.9 cm','Высота: 13,7 см · Глубина: 2,9 см','Aukštis: 13,7 cm · Gylis: 2,9 cm','Kõrgus: 13,7 cm · Sügavus: 2,9 cm'),
+            'text' => thermodul_i18n('Ūdens modelis darbojas ar dažādiem siltuma ģeneratoriem, tostarp katliem un siltumsūkņiem. Tas ir piemērots jaunbūvēm un renovācijām, viegli savietojams ar esošiem radiatoriem vai citu ūdens apkures sistēmu un ļauj regulēt telpas atsevišķi.','The water model works with a wide range of heat generators, including boilers and heat pumps. It suits new builds and renovations, can be combined with existing radiators or other hydronic heating, and allows room-by-room control.','Водяная модель работает с различными источниками тепла, включая котлы и тепловые насосы. Подходит для новостроек и реконструкции, совместима с существующими радиаторами и другими водяными системами отопления и позволяет регулировать помещения отдельно.','Vandens modelis veikia su įvairiais šilumos šaltiniais, įskaitant katilus ir šilumos siurblius. Tinka naujai statybai ir renovacijai, gali būti derinamas su esamais radiatoriais ar kita vandens šildymo sistema ir leidžia reguliuoti patalpas atskirai.','Veemudel töötab erinevate soojusallikatega, sh katelde ja soojuspumpadega. See sobib uusehitistesse ja renoveerimiseks, ühildub olemasolevate radiaatorite või muu vesiküttega ning võimaldab ruumipõhist reguleerimist.')
+        ),
         'abpusejais-modelis' => array(
             'meta' => thermodul_i18n('Augstums: 13,7 cm · Platums: 6,0 cm · Jauda x2','Height: 13.7 cm · Width: 6.0 cm · Double output','Высота: 13,7 см · Ширина: 6,0 см · Мощность x2','Aukštis: 13,7 cm · Plotis: 6,0 cm · Dviguba galia','Kõrgus: 13,7 cm · Laius: 6,0 cm · Topeltvõimsus'),
             'text' => thermodul_i18n('Risinājums logiem līdz grīdai un vietām, kur THERMODUL nevar stiprināt tieši pie sienas. Izskatās kā nepārtraukta grīdlīste no abām pusēm.','A solution for floor-to-ceiling windows and places where THERMODUL cannot be fixed directly to the wall. It creates a continuous baseboard look on both sides.','Решение для окон до пола и мест, где THERMODUL нельзя закрепить прямо к стене. С обеих сторон выглядит как непрерывный плинтус.','Sprendimas langams iki grindų ir vietoms, kur THERMODUL negalima tvirtinti tiesiai prie sienos. Iš abiejų pusių atrodo kaip vientisa grindjuostė.','Lahendus põrandani akendele ja kohtadesse, kus THERMODULit ei saa otse seinale kinnitada. Mõlemalt poolt jääb katkematu põrandaliistu mulje.')
@@ -239,19 +302,38 @@ function thermodul_model_texts($key) {
     return isset($texts[$key]) ? $texts[$key] : array('meta'=>'','text'=>'');
 }
 
+function thermodul_model_image_sources() {
+    // Exact product artwork used by the current www.thermodul.eu product pages/database.
+    return array(
+        'udens-modelis' => '2014/01/modelloacqua.jpg',
+        'abpusejais-modelis' => '2014/01/modellobifacciale2.jpg',
+        'dualais-modelis' => '2014/01/modellobivalente.jpg',
+        'dubultais-horizontalais-modelis' => '2014/01/modellofasciaorizz.jpg',
+        'dubultais-vertikalais-modelis' => '2014/01/modellofasciavert.jpg',
+        'elektriskais-modelis' => '2014/01/modelloelettrico.jpg',
+    );
+}
+
 function thermodul_models() {
+    /* v3.10.4: always use the exact six legacy model artworks. The importer stores
+     * these old-live files in the current Media Library (with AVIF variants), and
+     * thermodul_uploads_img() resolves to those local copies when available. */
+    $sources = thermodul_model_image_sources();
     $items = array(
-        array('title'=>thermodul_i18n('ABPUSĒJAIS MODELIS','DOUBLE-SIDED MODEL','ДВУСТОРОННЯЯ МОДЕЛЬ','DVIPUSIS MODELIS','KAHEPOOLNE MUDEL'),'slug'=>'abpusejais-modelis','img'=>'https://www.thermodul.eu/wp-content/uploads/2014/01/modellobifacciale2.jpg'),
-        array('title'=>thermodul_i18n('DUĀLAIS MODELIS','DUAL MODEL','ДУАЛЬНАЯ МОДЕЛЬ','DUALINIS MODELIS','DUAALMUDEL'),'slug'=>'dualais-modelis','img'=>'https://www.thermodul.eu/wp-content/uploads/2014/01/modellobivalente.jpg'),
-        array('title'=>thermodul_i18n('DUBULTAIS HORIZONTĀLAIS MODELIS','DOUBLE HORIZONTAL MODEL','ДВОЙНАЯ ГОРИЗОНТАЛЬНАЯ МОДЕЛЬ','DVIGUBAS HORIZONTALUS MODELIS','TOPELT HORISONTAALNE MUDEL'),'slug'=>'dubultais-horizontalais-modelis','img'=>'https://www.thermodul.eu/wp-content/uploads/2014/01/modellofasciaorizz.jpg'),
-        array('title'=>thermodul_i18n('DUBULTAIS VERTIKĀLAIS MODELIS','DOUBLE VERTICAL MODEL','ДВОЙНАЯ ВЕРТИКАЛЬНАЯ МОДЕЛЬ','DVIGUBAS VERTIKALUS MODELIS','TOPELT VERTIKAALNE MUDEL'),'slug'=>'dubultais-vertikalais-modelis','img'=>'https://www.thermodul.eu/wp-content/uploads/2014/01/modellofasciavert.jpg'),
-        array('title'=>thermodul_i18n('ELEKTRISKAIS MODELIS','ELECTRIC MODEL','ЭЛЕКТРИЧЕСКАЯ МОДЕЛЬ','ELEKTRINIS MODELIS','ELEKTRIMUDEL'),'slug'=>'elektriskais-modelis','img'=>'https://www.thermodul.eu/wp-content/uploads/2014/01/modelloelettrico.jpg'),
+        array('title'=>thermodul_i18n('ŪDENS MODELIS','WATER MODEL','ВОДЯНАЯ МОДЕЛЬ','VANDENS MODELIS','VEEMUDEL'),'slug'=>'udens-modelis','img'=>thermodul_uploads_img($sources['udens-modelis'])),
+        array('title'=>thermodul_i18n('ABPUSĒJAIS MODELIS','DOUBLE-SIDED MODEL','ДВУСТОРОННЯЯ МОДЕЛЬ','DVIPUSIS MODELIS','KAHEPOOLNE MUDEL'),'slug'=>'abpusejais-modelis','img'=>thermodul_uploads_img($sources['abpusejais-modelis'])),
+        array('title'=>thermodul_i18n('DUĀLAIS MODELIS','DUAL MODEL','ДУАЛЬНАЯ МОДЕЛЬ','DUALINIS MODELIS','DUAALMUDEL'),'slug'=>'dualais-modelis','img'=>thermodul_uploads_img($sources['dualais-modelis'])),
+        array('title'=>thermodul_i18n('DUBULTAIS HORIZONTĀLAIS MODELIS','DOUBLE HORIZONTAL MODEL','ДВОЙНАЯ ГОРИЗОНТАЛЬНАЯ МОДЕЛЬ','DVIGUBAS HORIZONTALUS MODELIS','TOPELT HORISONTAALNE MUDEL'),'slug'=>'dubultais-horizontalais-modelis','img'=>thermodul_uploads_img($sources['dubultais-horizontalais-modelis'])),
+        array('title'=>thermodul_i18n('DUBULTAIS VERTIKĀLAIS MODELIS','DOUBLE VERTICAL MODEL','ДВОЙНАЯ ВЕРТИКАЛЬНАЯ МОДЕЛЬ','DVIGUBAS VERTIKALUS MODELIS','TOPELT VERTIKAALNE MUDEL'),'slug'=>'dubultais-vertikalais-modelis','img'=>thermodul_uploads_img($sources['dubultais-vertikalais-modelis'])),
+        array('title'=>thermodul_i18n('ELEKTRISKAIS MODELIS','ELECTRIC MODEL','ЭЛЕКТРИЧЕСКАЯ МОДЕЛЬ','ELEKTRINIS MODELIS','ELEKTRIMUDEL'),'slug'=>'elektriskais-modelis','img'=>thermodul_uploads_img($sources['elektriskais-modelis'])),
     );
     foreach ($items as &$item) {
         $copy = thermodul_model_texts($item['slug']);
         $item['meta'] = $copy['meta'];
         $item['text'] = $copy['text'];
+        $item['modal_img'] = thermodul_avif_url_for($item['img']) ?: $item['img'];
     }
+    unset($item);
     return $items;
 }
 
@@ -291,12 +373,12 @@ function thermodul_home_text() {
 }
 function thermodul_feature_translations() {
     return array(
-        array('✓', thermodul_i18n('Vienmērīgs siltums','Even warmth','Равномерное тепло','Tolygi šiluma','Ühtlane soojus'), thermodul_i18n('Siltums izplatās pa telpas perimetru un palīdz novērst aukstās zonas.','Heat spreads around the room perimeter and helps remove cold zones.','Тепло распределяется по периметру помещения и устраняет холодные зоны.','Šiluma sklinda perimetru ir padeda pašalinti šaltas zonas.','Soojus levib ruumi perimeetris ja aitab vältida külmi tsoone.')),
-        array('✓', thermodul_i18n('Veselīgs gaiss','Healthy air','Здоровый воздух','Sveikas oras','Tervislik õhk'), thermodul_i18n('Mazāka putekļu cirkulācija un patīkamāks mikroklimats bērniem un alerģiskiem cilvēkiem.','Less dust circulation and a more pleasant climate for children and allergy-sensitive users.','Меньше циркуляции пыли и более приятный микроклимат для детей и аллергиков.','Mažesnė dulkių cirkuliacija ir malonesnis mikroklimatas vaikams bei alergiškiems žmonėms.','Vähem tolmuringlust ning meeldivam mikrokliima lastele ja allergikutele.')),
-        array('✓', thermodul_i18n('Energoefektīvi','Energy efficient','Энергоэффективно','Energiškai efektyvu','Energiasäästlik'), thermodul_i18n('Komfortu iespējams sasniegt ar zemāku telpas temperatūru un precīzu regulāciju.','Comfort can be reached at a lower room temperature with precise control.','Комфорт достигается при более низкой температуре и точном управлении.','Komfortą galima pasiekti esant žemesnei patalpos temperatūrai ir tiksliai reguliuojant.','Mugavuse saab saavutada madalama ruumitemperatuuri ja täpse juhtimisega.')),
-        array('✓', thermodul_i18n('Droši un uzticami','Safe and reliable','Безопасно и надёжно','Saugūs ir patikimi','Ohutu ja töökindel'), thermodul_i18n('Zema virsmas temperatūra un pārbaudīti Eiropas standarti.','Low surface temperature and tested European standards.','Низкая температура поверхности и проверенные европейские стандарты.','Žema paviršiaus temperatūra ir patikrinti Europos standartai.','Madal pinnatemperatuur ja kontrollitud Euroopa standardid.')),
-        array('✓', thermodul_i18n('Elegants dizains','Elegant design','Элегантный дизайн','Elegantiškas dizainas','Elegantne disain'), thermodul_i18n('Diskrēts risinājums, kas neaizņem sienas un saglabā tīru interjeru.','A discreet solution that keeps walls free and preserves a clean interior.','Деликатное решение освобождает стены и сохраняет чистый интерьер.','Diskretiškas sprendimas neužima sienų ir išlaiko švarų interjerą.','Diskreetne lahendus hoiab seinad vabad ja interjööri puhta.')),
-        array('✓', thermodul_i18n('Viegla uzstādīšana','Easy installation','Простой монтаж','Lengvas montavimas','Lihtne paigaldus'), thermodul_i18n('Piemērots jaunbūvēm, renovācijām un radiatoru nomaiņai.','Suitable for new builds, renovations, and replacing radiators.','Подходит для новостроек, ремонта и замены радиаторов.','Tinka naujai statybai, renovacijai ir radiatorių keitimui.','Sobib uusehitustele, renoveerimiseks ja radiaatorite asendamiseks.')),
+        array('✓', thermodul_i18n('Vienmērīgs starojuma siltums','Even radiant warmth','Равномерное лучистое тепло','Tolygus spindulinis šildymas','Ühtlane kiirgussoojus'), thermodul_i18n('THERMODUL darbojas galvenokārt (80–85%) ar siltuma starojumu. Vienmērīga siltuma sadale ļauj justies komfortabli arī pie līdz 2–3 °C zemākas telpas temperatūras nekā ar parastiem radiatoriem.','THERMODUL works mainly (80–85%) through radiant heat. Even heat distribution can provide comfort at a room temperature up to 2–3 °C lower than with conventional radiators.','THERMODUL работает главным образом (80–85%) за счёт лучистого тепла. Равномерное распределение тепла позволяет ощущать комфорт при температуре помещения до 2–3 °C ниже, чем с обычными радиаторами.','THERMODUL daugiausia (80–85 %) veikia spinduline šiluma. Tolygus šilumos pasiskirstymas leidžia jaustis komfortiškai esant iki 2–3 °C žemesnei patalpos temperatūrai nei su įprastais radiatoriais.','THERMODUL töötab peamiselt (80–85%) kiirgussoojusega. Ühtlane soojusjaotus võimaldab mugavust ka kuni 2–3 °C madalama ruumitemperatuuri juures kui tavaradiaatoritega.')),
+        array('✓', thermodul_i18n('Mierīgs mikroklimats','Gentle indoor climate','Мягкий микроклимат','Švelnus mikroklimatas','Rahulik sisekliima'), thermodul_i18n('Lēnā konvektīvā daļa (15–20%) ir paredzēta, lai mazinātu strauju gaisa, putekļu un sīko daļiņu kustību telpā, vienlaikus sildot sienu perimetru.','The slower convective share (15–20%) is designed to reduce strong movement of air, dust and fine particles while warming the wall perimeter.','Медленная конвективная составляющая (15–20%) предназначена для уменьшения интенсивного движения воздуха, пыли и мелких частиц при прогреве периметра стен.','Lėtesnė konvekcinė dalis (15–20 %) skirta sumažinti intensyvų oro, dulkių ir smulkių dalelių judėjimą, kartu šildant sienų perimetrą.','Aeglasem konvektsiooniosa (15–20%) on mõeldud õhu, tolmu ja peenosakeste tugeva liikumise vähendamiseks, soojendades samal ajal seinte perimeetrit.')),
+        array('✓', thermodul_i18n('Mazs ūdens daudzums','Low water volume','Малый объём воды','Mažas vandens kiekis','Väike veemaht'), thermodul_i18n('Pašreizējā THERMODUL informācijā norādīts, ka vienā sistēmas metrā ir aptuveni 276 ml ūdens; siltums tiek padots cilvēku uzturēšanās zonā, nevis koncentrēts pie griestiem.','Current THERMODUL information states that one metre of the system contains about 276 ml of water; heat is delivered in the occupied zone rather than being concentrated near the ceiling.','В текущей информации THERMODUL указано, что в одном метре системы находится около 276 мл воды; тепло подаётся в зоне пребывания людей, а не концентрируется под потолком.','Dabartinėje THERMODUL informacijoje nurodoma, kad viename sistemos metre yra apie 276 ml vandens; šiluma tiekiama žmonių buvimo zonoje, o ne koncentruojama prie lubų.','THERMODULi praeguse info järgi sisaldab üks meeter süsteemi umbes 276 ml vett; soojus antakse inimeste viibimistsooni, mitte ei koondu lae alla.')),
+        array('✓', thermodul_i18n('Vienkārši un funkcionāli','Simple and functional','Просто и функционально','Paprasta ir funkcionalu','Lihtne ja funktsionaalne'), thermodul_i18n('Sistēma stiprināma pie sienas, neprasa īpašu konstrukciju, ir viegli pārbaudāma un tīrāma. Tas atvieglo uzstādīšanu un turpmāku apkopi.','The system mounts to the wall, does not require a special structure, and is easy to inspect and clean, simplifying installation and ongoing maintenance.','Система крепится к стене, не требует специальной конструкции, легко проверяется и очищается, что упрощает монтаж и дальнейшее обслуживание.','Sistema tvirtinama prie sienos, nereikalauja specialios konstrukcijos, ją lengva patikrinti ir valyti, todėl paprastesnis montavimas ir priežiūra.','Süsteem kinnitatakse seinale, ei vaja erikonstruktsiooni ning seda on lihtne kontrollida ja puhastada, mis lihtsustab paigaldust ja hooldust.')),
+        array('✓', thermodul_i18n('Plašs pielietojums','Wide range of applications','Широкое применение','Platus pritaikymas','Lai kasutusala'), thermodul_i18n('Piemērots jaunbūvēm, renovācijām, radiatoru nomaiņai un kombinēšanai ar citām apkures sistēmām.','Suitable for new builds, renovations, radiator replacement, and combination with other heating systems.','Подходит для новостроек, реконструкции, замены радиаторов и совместной работы с другими системами отопления.','Tinka naujai statybai, renovacijai, radiatorių keitimui ir derinimui su kitomis šildymo sistemomis.','Sobib uusehitustesse, renoveerimiseks, radiaatorite asendamiseks ja kombineerimiseks teiste küttesüsteemidega.')),
+        array('✓', thermodul_i18n('Dizains un apdares','Design and finishes','Дизайн и отделка','Dizainas ir apdaila','Disain ja viimistlus'), thermodul_i18n('Standarta apdares ir baltā, tumši brūnā un anodēta alumīnija krāsa; pēc pasūtījuma vecajā THERMODUL piedāvājumā norādītas 1709 RAL krāsas, 10 koka un 2 marmora imitācijas.','Standard finishes are white, dark brown and anodized aluminium; the current legacy THERMODUL offer lists 1,709 RAL colors plus 10 wood and 2 marble-effect finishes to order.','Стандартные варианты — белый, тёмно-коричневый и анодированный алюминий; в действующем прежнем предложении THERMODUL указаны 1709 цветов RAL, 10 вариантов под дерево и 2 под мрамор на заказ.','Standartinės apdailos – balta, tamsiai ruda ir anoduoto aliuminio; dabartiniame sename THERMODUL pasiūlyme nurodytos 1709 RAL spalvos, 10 medžio ir 2 marmuro imitacijos pagal užsakymą.','Standardviimistlused on valge, tumepruun ja anodeeritud alumiinium; praeguses vanas THERMODULi pakkumises on tellimisel 1709 RAL-tooni, 10 puidu- ja 2 marmoriimitatsiooni.')),
     );
 }
 function thermodul_posts_data() {
@@ -311,7 +393,8 @@ function thermodul_posts_data() {
             'title' => thermodul_i18n('Kuru modeli izvēlēties?','Which model should you choose?','Какую модель выбрать?','Kurį modelį rinktis?','Millist mudelit valida?'),
             'excerpt' => thermodul_i18n('Ūdens, elektriskais un duālais modelis ļauj pielāgot sistēmu katlam, siltumsūknim vai atsevišķām telpām.','Water, electric, and dual models adapt the system to boilers, heat pumps, or separate rooms.','Водяная, электрическая и дуальная модели позволяют адаптировать систему к котлу, тепловому насосу или отдельным помещениям.','Vandens, elektrinis ir dualinis modeliai pritaikomi katilui, šilumos siurbliui ar atskiroms patalpoms.','Vee-, elektri- ja duaalmudelid sobivad katlale, soojuspumbale või eraldi ruumidele.'),
             'body' => thermodul_i18n('Ja ēkā jau ir ūdens apkure, ūdens modelis parasti ir galvenais risinājums. Elektriskais modelis ir ērts telpām bez centrālās apkures pieslēguma, savukārt duālais modelis apvieno abus režīmus un ir praktisks starpsezonā.','If a building already has hydronic heating, the water model is usually the main solution. The electric model is convenient for rooms without central heating, while the dual model combines both modes and is practical between seasons.','Если в здании уже есть водяное отопление, водяная модель обычно является основным решением. Электрическая модель удобна для помещений без центрального отопления, а дуальная сочетает оба режима и практична в межсезонье.','Jei pastate jau yra vandens šildymas, vandens modelis dažniausiai yra pagrindinis sprendimas. Elektrinis modelis patogus patalpoms be centrinio šildymo, o dualinis sujungia abu režimus ir praktiškas tarpsezoniu.','Kui hoones on juba vesiküte, on veemudel tavaliselt põhivalik. Elektrimudel sobib ruumidesse ilma keskkütteta ning duaalmudel ühendab mõlemad režiimid ja on praktiline üleminekuperioodil.'),
-            'image' => 'https://www.thermodul.eu/wp-content/uploads/2014/01/modellobivalente.jpg'
+            'image' => thermodul_asset_img('demo/model-selection-guide-v2.jpg'),
+            'modal_image' => thermodul_asset_img('demo/model-selection-guide-v2.avif')
         ),
         array(
             'title' => thermodul_i18n('Kāpēc grīdlīstes apsilde ir estētiska','Why baseboard heating is aesthetic','Почему плинтусное отопление эстетично','Kodėl grindjuosčių šildymas estetiškas','Miks põrandaliistu küte on esteetiline'),
@@ -323,19 +406,20 @@ function thermodul_posts_data() {
 }
 
 function thermodul_home_data() {
-    $gallery = thermodul_gallery_groups();
-    $flat = thermodul_gallery_flat_items();
-    $models = array_map(function($m) { $m['url'] = home_url('/' . $m['slug'] . '/'); return $m; }, thermodul_models());
-    return array(
-        'heroImage' => thermodul_asset_img('demo/hero-interior.jpg'),
-        'diagramImage' => thermodul_asset_img('demo/how-diagram.jpg'),
-        'contactImage' => thermodul_asset_img('demo/contact-interior.jpg'),
-        'models' => $models,
-        'gallery' => thermodul_featured_gallery_items(),
-        'galleryGroups' => $gallery,
-        'contactUrl' => home_url('/kontakti/'),
-        'galleryUrl' => home_url('/galerija/'),
-    );
+    return thermodul_cached('home_data', function() {
+        $gallery = thermodul_gallery_groups();
+        $models = array_map(function($m) { $m['url'] = home_url('/' . $m['slug'] . '/'); return $m; }, thermodul_models());
+        return array(
+            'heroImage' => thermodul_asset_img('demo/hero-interior.jpg'),
+            'diagramImage' => thermodul_asset_img('demo/how-diagram.jpg'),
+            'contactImage' => thermodul_asset_img('demo/contact-interior.jpg'),
+            'models' => $models,
+            'gallery' => thermodul_featured_gallery_items(),
+            'galleryGroups' => $gallery,
+            'contactUrl' => home_url('/kontakti/'),
+            'galleryUrl' => home_url('/galerija/'),
+        );
+    });
 }
 
 function thermodul_model_by_slug($slug) { foreach (thermodul_models() as $model) { if ($model['slug'] === $slug) { return $model; } } return null; }
@@ -391,12 +475,25 @@ function thermodul_gallery_shortcode($atts = array()) {
 
 add_shortcode('thermodul_gallery', 'thermodul_gallery_shortcode');
 
+function thermodul_legacy_page_url($slug, $fallback_anchor = '') {
+    $page = get_page_by_path($slug, OBJECT, 'page');
+    if ($page && $page->post_status === 'publish') {
+        $lang = thermodul_current_lang();
+        if ($lang === 'lv') { return get_permalink($page->ID); }
+        if (function_exists('pll_get_post')) {
+            $translated_id = pll_get_post($page->ID, $lang);
+            if ($translated_id) { return get_permalink($translated_id); }
+        }
+    }
+    return thermodul_anchor_url($fallback_anchor);
+}
+
 function thermodul_models_shortcode() {
     ob_start(); echo '<div class="row g-4 td-models-grid">';
     foreach (thermodul_models() as $m) { ?>
         <div class="col-md-6 col-xl-4"><article class="td-card td-model-card">
-            <button class="td-model-image-link td-open-card" type="button" data-modal-title="<?php echo esc_attr($m['title']); ?>" data-modal-body="<?php echo esc_attr($m['text'] . ' ' . $m['meta']); ?>" data-modal-image="<?php echo esc_url($m['img']); ?>"><?php echo thermodul_picture($m['img'], $m['title'], 'td-model-img', 'lazy'); ?></button>
-            <div class="td-card-body"><h3><?php echo esc_html($m['title']); ?></h3><p><strong><?php echo esc_html($m['meta']); ?></strong></p><p><?php echo esc_html($m['text']); ?></p><button type="button" class="td-link td-post-trigger td-as-link" data-post-title="<?php echo esc_attr($m['title']); ?>" data-post-body="<?php echo esc_attr($m['text'] . ' ' . $m['meta']); ?>" data-post-image="<?php echo esc_url($m['img']); ?>"><?php echo esc_html(thermodul_i18n('Skatīt vairāk','View more','Подробнее','Žiūrėti daugiau','Vaata rohkem')); ?> →</button></div></article></div>
+            <button class="td-model-image-link td-open-card" type="button" data-modal-title="<?php echo esc_attr($m['title']); ?>" data-modal-body="<?php echo esc_attr($m['text'] . ' ' . $m['meta']); ?>" data-modal-image="<?php echo esc_url(!empty($m['modal_img']) ? $m['modal_img'] : $m['img']); ?>"><?php echo thermodul_picture($m['img'], $m['title'], 'td-model-img', 'lazy'); ?></button>
+            <div class="td-card-body"><h3><?php echo esc_html($m['title']); ?></h3><p><strong><?php echo esc_html($m['meta']); ?></strong></p><p><?php echo esc_html($m['text']); ?></p><a class="td-link" href="<?php echo esc_url(thermodul_legacy_page_url($m['slug'], 'modeli')); ?>"><?php echo esc_html(thermodul_i18n('Skatīt vairāk','View more','Подробнее','Žiūrėti daugiau','Vaata rohkem')); ?> →</a></div></article></div>
     <?php } echo '</div>'; return ob_get_clean();
 }
 add_shortcode('thermodul_models', 'thermodul_models_shortcode');
@@ -409,14 +506,20 @@ function thermodul_home_blocks() {
 function thermodul_page_content($slug) {
     $model = thermodul_model_by_slug($slug);
     if ($model) {
-        return '<!-- wp:paragraph --><p>'.esc_html($model['text']).'</p><!-- /wp:paragraph -->'
+        $safety = '';
+        if ($slug === 'elektriskais-modelis') {
+            $safety = '<!-- wp:paragraph --><p><strong>Drošība:</strong> saskaņā ar pašreizējās THERMODUL lapas norādi elektrisko modeli nedrīkst uzstādīt vannas istabā. Elektroinstalācija jāveic atbilstoši piemērojamām drošības prasībām.</p><!-- /wp:paragraph -->';
+        }
+        return '<!-- wp:image {"sizeSlug":"large"} --><figure class="wp-block-image size-large"><img src="'.esc_url($model['img']).'" alt="'.esc_attr($model['title']).'" /></figure><!-- /wp:image -->'
+        .'<!-- wp:paragraph --><p>'.esc_html($model['text']).'</p><!-- /wp:paragraph -->'
         .'<!-- wp:list --><ul><li>Viegli savietojams ar interjeru un esošu apkures sistēmu.</li><li>Vienmērīga siltuma sadale gar sienām un telpas perimetru.</li><li>Diskrēts korpuss ar plašām krāsu un apdares iespējām.</li></ul><!-- /wp:list -->'
         .'<!-- wp:paragraph --><p><strong>'.esc_html($model['meta']).'</strong></p><!-- /wp:paragraph -->'
+        .$safety
         .'<!-- wp:shortcode -->[thermodul_contact_form]<!-- /wp:shortcode -->';
     }
     $map = array(
         'par-uznemumu' => '<!-- wp:heading --><h2>Par uzņēmumu</h2><!-- /wp:heading --><!-- wp:paragraph --><p>Jau vairāk nekā 16 gadus Baltijas tirgū SIA “AQUADOCK BALTIJA” piedāvā grīdlīstes apsildes sistēmu THERMODUL. Sistēma atbilst Eiropas Savienības normām EN442 un ļauj radiatoru vietā izmantot estētisku, drošu un energoefektīvu perimetra apsildi.</p><!-- /wp:paragraph --><!-- wp:paragraph --><p>THERMODUL ir piemērots jaunbūvēm, renovācijām, sabiedriskām telpām un privātmājām. Nelielais izmērs netraucē mēbelēm, saglabā tīras interjera līnijas un palīdz uzturēt veselīgu mikroklimatu.</p><!-- /wp:paragraph --><!-- wp:shortcode -->[thermodul_models]<!-- /wp:shortcode -->',
-        'sertifikacija' => '<!-- wp:heading --><h2>Mūsu idejām ir konkrēta forma un sertifikācija</h2><!-- /wp:heading --><!-- wp:paragraph --><p>THERMODUL ir pārbaudīta kvalitāte un apstiprināta efektivitāte. Produkts atbilst Eiropas kvalitātes un drošības standartiem, tostarp CE marķējumam, RoHS prasībām, EN442 testiem un IP20 aizsardzības klasei.</p><!-- /wp:paragraph --><!-- wp:paragraph --><p>Sistēma atbilst ekoloģiskās būvniecības principiem, jo palīdz nodrošināt komfortu ar zemāku telpas temperatūru un samazinātu lieku gaisa kustību.</p><!-- /wp:paragraph --><!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>CE</strong><span>Atbilst ES direktīvām</span></div></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>RoHS</strong><span>Videi draudzīgi materiāli</span></div></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>EN442</strong><span>Siltuma atdeves tests</span></div></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>IP20</strong><span>Aizsardzības klase</span></div></div><!-- /wp:column --></div><!-- /wp:columns -->',
+        'sertifikacija' => '<!-- wp:heading --><h2>Mūsu idejām ir konkrēta forma un sertifikācija</h2><!-- /wp:heading --><!-- wp:paragraph --><p>Pašreizējā THERMODUL vietne norāda, ka sistēma ir sertificēta saskaņā ar Eiropas apkures efektivitātes normām un atbilst EN442 prasībām. Vietnē ir publicēts EN442 materiāls un sertifikācijas mērījumu attēls.</p><!-- /wp:paragraph --><!-- wp:paragraph --><p>Pašreizējā sertifikācijas lapā ir minēti arī ekoloģiskās būvniecības principi un “PLAN EXPO FAIR 2006” Dublinā saņemta balva. Pirms papildu CE, RoHS vai IP aizsardzības klases apgalvojumu publicēšanas tie jāpārbauda pret aktuālajiem ražotāja dokumentiem.</p><!-- /wp:paragraph --><!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>EN442</strong><span>Apkures sistēmu prasības</span></div></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>EU</strong><span>Eiropas apkures efektivitātes normas</span></div></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>ECO</strong><span>Ekoloģiskās būvniecības principi</span></div></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><div class="td-card td-cert-card"><strong>2006</strong><span>Plan Expo Fair, Dublina</span></div></div><!-- /wp:column --></div><!-- /wp:columns -->',
         'galerija' => '<!-- wp:heading --><h2>THERMODUL galerija</h2><!-- /wp:heading --><!-- wp:paragraph --><p>Uzstādījumu piemēri dzīvojamām istabām, kafejnīcām un restorāniem, muzejiem, ofisiem un veselības iestādēm, palīgtelpām, reliģiskām telpām, skolām, bērnudārziem un veikaliem. Demo importētājs mēģina ielādēt šos attēlus WordPress Media Library un izveidot AVIF versijas.</p><!-- /wp:paragraph --><!-- wp:shortcode -->[thermodul_gallery grouped="yes" ajax="yes"]<!-- /wp:shortcode -->',
         'kontakti' => '<!-- wp:group {"className":"td-contact-page-grid","layout":{"type":"constrained"}} --><div class="wp-block-group td-contact-page-grid"><!-- wp:heading --><h2>Pieprasīt informāciju</h2><!-- /wp:heading --><!-- wp:paragraph --><p>Aizpildiet formu, un THERMODUL speciālists sazināsies ar jums par piemērotāko risinājumu jūsu projektam.</p><!-- /wp:paragraph --><!-- wp:shortcode -->[thermodul_contact_form recipient="info@thermodul.eu"]<!-- /wp:shortcode --><!-- wp:heading --><h2>Kontakti</h2><!-- /wp:heading --><!-- wp:shortcode -->[thermodul_contacts]<!-- /wp:shortcode --></div><!-- /wp:group -->',
         'lapas-karte' => '<!-- wp:heading --><h2>Lapas karte</h2><!-- /wp:heading --><!-- wp:paragraph --><p>THERMODUL informācija vienā lapā: sākums, priekšrocības, darbības princips, modeļi, galerija, sertifikācija un kontakti.</p><!-- /wp:paragraph --><!-- wp:list --><ul><li>Sākums</li><li>Kāpēc izvēlēties?</li><li>Kā tas darbojas</li><li>Modeļi: Ūdens, Elektriskais, Duālais, Abpusējais, Dubultais horizontālais, Dubultais vertikālais</li><li>Galerija</li><li>Sertifikācija</li><li>Kontakti un pieprasījuma forma</li></ul><!-- /wp:list -->' ,
@@ -466,8 +569,13 @@ add_action('init', 'thermodul_register_block_patterns');
 function thermodul_all_demo_image_paths() {
     $paths = array();
     foreach (thermodul_gallery_raw_paths() as $group => $items) { foreach ($items as $p) { $paths[] = $p; } }
-    foreach (thermodul_models() as $m) { if (!empty($m['img'])) { $paths[] = $m['img']; } }
+    foreach (thermodul_model_image_sources() as $path) {
+        $paths[] = 'https://www.thermodul.eu/wp-content/uploads/' . ltrim($path, '/');
+    }
     $paths[] = thermodul_uploads_img('2018/03/ka-THERMODUL-darbojas.jpg');
+    $paths[] = 'https://www.thermodul.eu/wp-content/uploads/2014/01/award_min.jpg';
+    $paths[] = 'https://www.thermodul.eu/wp-content/uploads/2014/01/inbioedilizia.jpg';
+    $paths[] = 'https://www.thermodul.eu/wp-content/uploads/2014/01/EN442-b.jpg';
     return array_values(array_unique($paths));
 }
 function thermodul_sideload_demo_images($limit = 80) {
@@ -521,6 +629,8 @@ function thermodul_create_demo_pages() {
     if (!empty($front_id) && !is_wp_error($front_id)) { update_option('show_on_front','page'); update_option('page_on_front', $front_id); }
     thermodul_cleanup_duplicate_demo_pages();
     thermodul_remove_extra_demo_pages();
+    thermodul_ensure_polylang_front_pages();
+    thermodul_clear_theme_cache();
     $menu_name = 'THERMODUL galvenā izvēlne';
     $menu = wp_get_nav_menu_object($menu_name); $menu_id = $menu ? $menu->term_id : wp_create_nav_menu($menu_name);
     if ($menu_id && !is_wp_error($menu_id)) {
@@ -538,12 +648,110 @@ function thermodul_create_demo_pages() {
     }
     flush_rewrite_rules(false);
 }
-function thermodul_remove_extra_demo_pages() {
-    foreach (array_keys(thermodul_anchor_map()) as $slug) {
-        $page = get_page_by_path($slug);
-        if ($page && $page->post_type === 'page') { wp_trash_post($page->ID); }
+function thermodul_legacy_page_titles() {
+    return array(
+        'par-uznemumu' => 'Par uzņēmumu',
+        'sertifikacija' => 'Sertifikācija',
+        'galerija' => 'Galerija',
+        'kontakti' => 'Kontakti',
+        'udens-modelis' => 'ŪDENS MODELIS',
+        'elektriskais-modelis' => 'ELEKTRISKAIS MODELIS',
+        'dualais-modelis' => 'DUĀLAIS MODELIS',
+        'abpusejais-modelis' => 'ABPUSĒJAIS MODELIS',
+        'dubultais-horizontalais-modelis' => 'DUBULTAIS HORIZONTĀLAIS MODELIS',
+        'dubultais-vertikalais-modelis' => 'DUBULTAIS VERTIKĀLAIS MODELIS',
+        'lapas-karte' => 'Lapas karte',
+    );
+}
+function thermodul_ensure_legacy_pages() {
+    foreach (thermodul_legacy_page_titles() as $slug => $title) {
+        $page = get_page_by_path($slug, OBJECT, 'page');
+        $content = thermodul_page_content($slug);
+        if ($page) {
+            $update = array('ID' => $page->ID);
+            $needs_update = false;
+            if ($page->post_status === 'trash') { $update['post_status'] = 'publish'; $needs_update = true; }
+            if (trim((string) $page->post_content) === '' && $content !== '') { $update['post_content'] = $content; $needs_update = true; }
+            if ($needs_update) { wp_update_post($update); }
+            continue;
+        }
+        wp_insert_post(array(
+            'post_title' => $title,
+            'post_name' => $slug,
+            'post_type' => 'page',
+            'post_status' => 'publish',
+            'post_content' => $content,
+        ));
     }
 }
+function thermodul_remove_extra_demo_pages() {
+    // v3.8: old indexed THERMODUL pages are migration assets, not disposable demo pages.
+    thermodul_ensure_legacy_pages();
+}
+
+function thermodul_ensure_polylang_front_pages() {
+    if (!function_exists('pll_set_post_language') || !function_exists('pll_save_post_translations')) { return false; }
+    $front_id = (int) get_option('page_on_front');
+    if (!$front_id || get_post_type($front_id) !== 'page') {
+        $front = get_page_by_path('sakums', OBJECT, 'page');
+        if (!$front) { return false; }
+        $front_id = (int) $front->ID;
+    }
+    $specs = array(
+        'lv' => array('title'=>'Sākums','slug'=>'sakums'),
+        'en' => array('title'=>'Home','slug'=>'home'),
+        'ru' => array('title'=>'Главная','slug'=>'glavnaya'),
+        'lt' => array('title'=>'Pradžia','slug'=>'pradzia'),
+        'et' => array('title'=>'Avaleht','slug'=>'avaleht'),
+    );
+    $translations = array('lv'=>$front_id);
+    $changed = false;
+    pll_set_post_language($front_id, 'lv');
+    foreach ($specs as $lang=>$spec) {
+        if ($lang === 'lv') { continue; }
+        $id = function_exists('pll_get_post') ? (int) pll_get_post($front_id, $lang) : 0;
+        if (!$id) {
+            $existing = get_page_by_path($spec['slug'], OBJECT, 'page');
+            $id = $existing ? (int) $existing->ID : 0;
+        }
+        if (!$id) {
+            $id = wp_insert_post(array('post_title'=>$spec['title'], 'post_name'=>$spec['slug'], 'post_type'=>'page', 'post_status'=>'publish', 'post_content'=>''));
+            if (is_wp_error($id)) { continue; }
+            $changed = true;
+        } else {
+            $post = get_post($id);
+            if ($post && ($post->post_status !== 'publish' || $post->post_title !== $spec['title'])) {
+                wp_update_post(array('ID'=>$id,'post_status'=>'publish','post_title'=>$spec['title']));
+                $changed = true;
+            }
+        }
+        pll_set_post_language($id, $lang);
+        $translations[$lang] = (int) $id;
+    }
+    if (count($translations) === count($specs)) {
+        pll_save_post_translations($translations);
+        update_option('show_on_front', 'page');
+        update_option('page_on_front', $front_id);
+        if ($changed) { flush_rewrite_rules(false); }
+        return true;
+    }
+    return false;
+}
+
+function thermodul_v310_safe_migration() {
+    if (!is_admin() || !current_user_can('manage_options')) { return; }
+    $done = (string) get_option('thermodul_theme_data_version', '');
+    if ($done === THERMODUL_THEME_VERSION) { return; }
+    // Safe-only migration: preserve/create the legacy URLs and keep redirects off.
+    thermodul_ensure_legacy_pages();
+    thermodul_ensure_polylang_front_pages();
+    thermodul_clear_theme_cache();
+    if (get_option('thermodul_redirect_legacy_pages', null) === null) {
+        add_option('thermodul_redirect_legacy_pages', 0, '', false);
+    }
+    update_option('thermodul_theme_data_version', THERMODUL_THEME_VERSION, false);
+}
+add_action('admin_init', 'thermodul_v310_safe_migration', 30);
 
 
 /* v2.5 cleanup: prevent old demo blocks from stacking all sections on one page after repeated imports. */
@@ -573,7 +781,10 @@ function thermodul_admin_menu() { add_theme_page('THERMODUL Demo Import', 'THERM
 add_action('admin_menu', 'thermodul_admin_menu');
 function thermodul_demo_import_page() {
     if (isset($_POST['thermodul_demo_import']) && check_admin_referer('thermodul_demo_import')) { thermodul_create_demo_pages(); echo '<div class="notice notice-success"><p>THERMODUL one-page homepage, anchor menu, media gallery and SEO settings have been refreshed.</p></div>'; }
-    echo '<div class="wrap"><h1>THERMODUL Demo Import</h1><p>This refreshes the single-page THERMODUL homepage, anchor menu, gallery media and compressed AVIF variants. Extra legacy pages are moved to trash and redirected to homepage sections.</p><form method="post">'; wp_nonce_field('thermodul_demo_import'); submit_button('Import / Refresh THERMODUL demo content', 'primary', 'thermodul_demo_import'); echo '</form></div>';
+    $captcha_status = function_exists('thermodul_hcaptcha_ready') && thermodul_hcaptcha_ready()
+        ? '<span style="color:#138a43;font-weight:700">Ready - WP BBuilder hCaptcha keys detected.</span>'
+        : '<span style="color:#b42318;font-weight:700">Not ready - enable hCaptcha and save both keys in WP BBuilder settings.</span>';
+    echo '<div class="wrap"><h1>THERMODUL Demo Import</h1><p>This refreshes the THERMODUL homepage, anchor menu, gallery media and compressed AVIF variants. Existing indexed legacy pages are preserved/restored so old URLs keep working; optional redirects can be enabled separately under THERMODUL SEO & Analytics.</p><p><strong>Contact form hCaptcha:</strong> '.$captcha_status.'</p><form method="post">'; wp_nonce_field('thermodul_demo_import'); submit_button('Import / Refresh THERMODUL demo content', 'primary', 'thermodul_demo_import'); echo '</form></div>';
 }
 
 
@@ -605,14 +816,28 @@ function thermodul_i18n($lv, $en = '', $ru = '', $lt = '', $et = '') {
     return $lv;
 }
 
+function thermodul_wpbb_option($key, $default = '') {
+    // Prefer WP BBuilder's public helper. Fall back to its stored option array so
+    // the frontend form remains protected even if the helper is not loaded yet.
+    if (function_exists('wpbb_get_option')) {
+        $value = wpbb_get_option($key, $default);
+        if ($value !== null) { return $value; }
+    }
+    $settings = get_option('wpbb_settings', array());
+    if (is_array($settings) && array_key_exists($key, $settings)) { return $settings[$key]; }
+    return $default;
+}
 function thermodul_hcaptcha_enabled() {
-    return function_exists('wpbb_get_option') && (bool) wpbb_get_option('hcaptcha_enabled', 0);
+    return (bool) thermodul_wpbb_option('hcaptcha_enabled', 0);
 }
 function thermodul_hcaptcha_site_key() {
-    return thermodul_hcaptcha_enabled() && function_exists('wpbb_get_option') ? trim((string) wpbb_get_option('hcaptcha_site_key', '')) : '';
+    return thermodul_hcaptcha_enabled() ? trim((string) thermodul_wpbb_option('hcaptcha_site_key', '')) : '';
 }
 function thermodul_hcaptcha_secret_key() {
-    return thermodul_hcaptcha_enabled() && function_exists('wpbb_get_option') ? trim((string) wpbb_get_option('hcaptcha_secret_key', '')) : '';
+    return thermodul_hcaptcha_enabled() ? trim((string) thermodul_wpbb_option('hcaptcha_secret_key', '')) : '';
+}
+function thermodul_hcaptcha_ready() {
+    return thermodul_hcaptcha_enabled() && thermodul_hcaptcha_site_key() !== '' && thermodul_hcaptcha_secret_key() !== '';
 }
 function thermodul_hcaptcha_message($key) {
     $messages = array(
@@ -629,12 +854,13 @@ function thermodul_verify_hcaptcha() {
     if (!$secret || !$site) { return new WP_Error('thermodul_hcaptcha_missing', thermodul_hcaptcha_message('missing')); }
     $token = isset($_POST['h-captcha-response']) ? sanitize_text_field(wp_unslash($_POST['h-captcha-response'])) : '';
     if (!$token) { return new WP_Error('thermodul_hcaptcha_token', thermodul_hcaptcha_message('complete')); }
-    $response = wp_remote_post('https://hcaptcha.com/siteverify', array(
+    $response = wp_remote_post('https://api.hcaptcha.com/siteverify', array(
         'timeout' => 12,
         'body' => array(
             'secret' => $secret,
             'response' => $token,
             'remoteip' => isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '',
+            'sitekey' => $site,
         ),
     ));
     if (is_wp_error($response)) { return new WP_Error('thermodul_hcaptcha_request', thermodul_hcaptcha_message('failed')); }
@@ -645,7 +871,7 @@ function thermodul_verify_hcaptcha() {
 function thermodul_hcaptcha_widget() {
     $site_key = thermodul_hcaptcha_site_key();
     if (!$site_key) { return ''; }
-    return '<div class="td-hcaptcha-wrap"><div class="h-captcha" data-sitekey="'.esc_attr($site_key).'" data-theme="light"></div><input type="hidden" name="wpbb_captcha_enabled" value="1"><input type="hidden" name="wpbb_captcha_provider" value="hcaptcha"><p class="td-hcaptcha-note">'.esc_html(thermodul_i18n('Aizsargāts ar hCaptcha.', 'Protected by hCaptcha.', 'Защищено hCaptcha.', 'Apsaugota naudojant hCaptcha.', 'Kaitstud hCaptcha abil.')).'</p></div>';
+    return '<div class="td-hcaptcha-wrap"><div class="h-captcha" data-sitekey="'.esc_attr($site_key).'" data-theme="light"></div><input type="hidden" name="wpbb_captcha_enabled" value="1"><input type="hidden" name="wpbb_captcha_provider" value="hcaptcha"></div>';
 }
 function thermodul_language_home_url($lang = null) {
     $lang = $lang ?: thermodul_current_lang();
@@ -653,6 +879,12 @@ function thermodul_language_home_url($lang = null) {
     return $lang === 'lv' ? home_url('/') : home_url('/' . $lang . '/');
 }
 function thermodul_language_url_for_current_object($lang) {
+    if (is_front_page() || get_query_var('thermodul_onepage')) { return thermodul_language_home_url($lang); }
+    if (is_singular() && function_exists('pll_get_post')) {
+        $translated_id = pll_get_post(get_queried_object_id(), $lang);
+        if ($translated_id) { return get_permalink($translated_id); }
+    }
+    if (is_singular() && $lang === 'lv') { return get_permalink(get_queried_object_id()); }
     return thermodul_language_home_url($lang);
 }
 function thermodul_language_switcher($class = 'td-lang-switch') {
@@ -662,8 +894,14 @@ function thermodul_language_switcher($class = 'td-lang-switch') {
     echo '</div>';
 }
 function thermodul_hreflang_meta() {
-    foreach (thermodul_supported_languages() as $slug=>$info) { echo '<link rel="alternate" hreflang="'.esc_attr($info['hreflang']).'" href="'.esc_url(thermodul_language_url_for_current_object($slug)).'">' . "\n"; }
-    echo '<link rel="alternate" hreflang="x-default" href="'.esc_url(thermodul_language_url_for_current_object('lv')).'">' . "\n";
+    $all_languages = is_front_page() || get_query_var('thermodul_onepage') || (is_singular() && function_exists('pll_get_post'));
+    if ($all_languages) {
+        foreach (thermodul_supported_languages() as $slug=>$info) {
+            $url = thermodul_language_url_for_current_object($slug);
+            if ($url) { echo '<link rel="alternate" hreflang="'.esc_attr($info['hreflang']).'" href="'.esc_url($url).'">' . "\n"; }
+        }
+        echo '<link rel="alternate" hreflang="x-default" href="'.esc_url(thermodul_language_url_for_current_object('lv')).'">' . "\n";
+    }
 }
 add_action('wp_head', 'thermodul_hreflang_meta', 4);
 function thermodul_register_polylang_strings() {
@@ -723,17 +961,19 @@ function thermodul_generate_avif_on_upload($metadata, $attachment_id) {
 add_filter('wp_generate_attachment_metadata', 'thermodul_generate_avif_on_upload', 20, 2);
 
 function thermodul_local_search_index() {
-    $items = array(
-        array('title'=>'Siltās grīdlīstes THERMODUL','url'=>home_url('/#sakums'),'type'=>'Sadaļa','excerpt'=>'Komforts, dizains un efektīva apsildes sistēma.'),
-        array('title'=>'Kāpēc izvēlēties?','url'=>home_url('/#kapec'),'type'=>'Sadaļa','excerpt'=>'Vienmērīgs siltums, veselīgs gaiss, energoefektivitāte un dizains.'),
-        array('title'=>'Kā tas darbojas','url'=>home_url('/#ka-tas-darbojas'),'type'=>'Sadaļa','excerpt'=>'Siltuma starojums, grīdlīstes sildelements un komforts.'),
-        array('title'=>'Modeļi','url'=>home_url('/#modeli'),'type'=>'Sadaļa','excerpt'=>'Ūdens, elektriskais, duālais un dubultais modelis.'),
-        array('title'=>'Galerija','url'=>thermodul_anchor_url('galerija'),'type'=>'Sadaļa','excerpt'=>'Uzstādījumu galerija un objektu kategorijas.'),
-        array('title'=>'Kontakti','url'=>thermodul_anchor_url('pieprasijums'),'type'=>'Sadaļa','excerpt'=>'Saziņas forma, tālrunis un e-pasts.'),
-    );
-    foreach (thermodul_models() as $m) { $items[] = array('title'=>$m['title'], 'url'=>thermodul_anchor_url('modeli'), 'type'=>thermodul_i18n('Modelis','Model','Модель','Modelis','Mudel'), 'excerpt'=>$m['text']); }
-    foreach (thermodul_posts_data() as $p) { $items[] = array('title'=>$p['title'], 'url'=>thermodul_anchor_url('padomi'), 'type'=>thermodul_i18n('Raksts','Post','Статья','Straipsnis','Artikkel'), 'excerpt'=>$p['excerpt']); }
-    return $items;
+    return thermodul_cached('local_search_index', function() {
+        $items = array(
+            array('title'=>'Siltās grīdlīstes THERMODUL','url'=>home_url('/#sakums'),'type'=>'Sadaļa','excerpt'=>'Komforts, dizains un efektīva apsildes sistēma.'),
+            array('title'=>'Kāpēc izvēlēties?','url'=>home_url('/#kapec'),'type'=>'Sadaļa','excerpt'=>'Vienmērīgs siltums, veselīgs gaiss, energoefektivitāte un dizains.'),
+            array('title'=>'Kā tas darbojas','url'=>home_url('/#ka-tas-darbojas'),'type'=>'Sadaļa','excerpt'=>'Siltuma starojums, grīdlīstes sildelements un komforts.'),
+            array('title'=>'Modeļi','url'=>home_url('/#modeli'),'type'=>'Sadaļa','excerpt'=>'Ūdens, elektriskais, duālais un dubultais modelis.'),
+            array('title'=>'Galerija','url'=>thermodul_anchor_url('galerija'),'type'=>'Sadaļa','excerpt'=>'Uzstādījumu galerija un objektu kategorijas.'),
+            array('title'=>'Kontakti','url'=>thermodul_anchor_url('pieprasijums'),'type'=>'Sadaļa','excerpt'=>'Saziņas forma, tālrunis un e-pasts.'),
+        );
+        foreach (thermodul_models() as $m) { $items[] = array('title'=>$m['title'], 'url'=>thermodul_legacy_page_url($m['slug'], 'modeli'), 'type'=>thermodul_i18n('Modelis','Model','Модель','Modelis','Mudel'), 'excerpt'=>$m['text']); }
+        foreach (thermodul_posts_data() as $p) { $items[] = array('title'=>$p['title'], 'url'=>thermodul_anchor_url('padomi'), 'type'=>thermodul_i18n('Raksts','Post','Статья','Straipsnis','Artikkel'), 'excerpt'=>$p['excerpt']); }
+        return $items;
+    });
 }
 function thermodul_ajax_search() {
     check_ajax_referer('thermodul_search', 'nonce');
@@ -782,7 +1022,7 @@ function thermodul_contact_form_shortcode($atts = array()) {
         <div class="td-form-row"><input name="name" required placeholder="<?php echo esc_attr(thermodul_i18n('Vārds','Name','Имя','Vardas','Nimi')); ?>"><input type="email" name="email" required placeholder="<?php echo esc_attr(thermodul_i18n('E-pasts','Email','Эл. почта','El. paštas','E-post')); ?>"></div>
         <div class="td-form-row"><input name="phone" placeholder="<?php echo esc_attr(thermodul_i18n('Tālrunis','Phone','Телефон','Telefonas','Telefon')); ?>"><span class="td-select-wrap"><select name="interest"><option value=""><?php echo esc_html(thermodul_i18n('Interesējošais risinājums','Solution of interest','Интересующее решение','Dominantis sprendimas','Huvipakkuv lahendus')); ?></option><option>Ūdens modelis</option><option>Elektriskais modelis</option><option>Duālais modelis</option><option>Galerijas/objekta konsultācija</option></select></span></div>
         <textarea name="message" required placeholder="<?php echo esc_attr(thermodul_i18n('Pastāstiet par projektu, telpu platību vai jautājumu...','Tell us about the project, room area or question...','Расскажите о проекте, площади помещения или вопросе...','Papasakokite apie projektą, patalpos plotą ar klausimą...','Rääkige projektist, ruumi suurusest või küsimusest...')); ?>"></textarea>
-        <label class="td-consent"><input type="checkbox" name="privacy" required> <?php echo esc_html(thermodul_i18n('Piekrītu, ka ar mani sazinās par šo pieprasījumu.','I agree to be contacted about this request.','Я согласен, чтобы со мной связались по этому запросу.','Sutinku, kad su manimi susisiektų dėl šios užklausos.','Nõustun, et minuga võetakse selle päringu osas ühendust.')); ?></label>
+        <label class="td-consent"><input type="checkbox" name="privacy" required><span><?php echo esc_html(thermodul_i18n('Piekrītu, ka ar mani sazinās par šo pieprasījumu.','I agree to be contacted about this request.','Я согласен, чтобы со мной связались по этому запросу.','Sutinku, kad su manimi susisiektų dėl šios užklausos.','Nõustun, et minuga võetakse selle päringu osas ühendust.')); ?></span></label>
         <?php echo thermodul_hcaptcha_widget(); ?>
         <button class="td-btn" type="submit"><?php echo esc_html($cfg['submit']); ?></button>
         <div class="td-form-status" aria-live="polite"></div>
@@ -888,4 +1128,271 @@ function thermodul_onepage_seo_meta_v27() {
     ), JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE).'</script>' . "
 ";
 }
-add_action('wp_head', 'thermodul_onepage_seo_meta_v27', 2);
+// v3.8 replaces the old blanket one-page meta output with context-aware SEO below.
+// add_action('wp_head', 'thermodul_onepage_seo_meta_v27', 2);
+
+
+/* THERMODUL v3.8 migration-safe SEO, analytics and legacy URL support */
+function thermodul_has_external_seo_plugin() {
+    return defined('WPSEO_VERSION') || defined('RANK_MATH_VERSION') || defined('AIOSEO_VERSION');
+}
+function thermodul_seo_current_slug() {
+    if (is_front_page() || get_query_var('thermodul_onepage')) { return 'home'; }
+    if (is_page()) { $obj = get_queried_object(); return !empty($obj->post_name) ? $obj->post_name : ''; }
+    return '';
+}
+function thermodul_seo_data() {
+    $slug = thermodul_seo_current_slug();
+    $home = array(
+        'title' => thermodul_i18n(
+            'Siltās grīdlīstes THERMODUL | Efektīva apkures sistēma',
+            'THERMODUL Warm Baseboard Heating | Efficient Heating System',
+            'Тёплый плинтус THERMODUL | Эффективная система отопления',
+            'THERMODUL šiltos grindjuostės | Efektyvi šildymo sistema',
+            'THERMODUL soe põrandaliist | Tõhus küttesüsteem'
+        ),
+        'description' => thermodul_i18n(
+            'THERMODUL siltās grīdlīstes vienmērīgai un energoefektīvai telpu apkurei. Ūdens, elektriskie un kombinētie modeļi mājām un komerctelpām.',
+            'THERMODUL warm baseboard heating for even, efficient room comfort. Water, electric and combined models for homes and commercial spaces.',
+            'Тёплый плинтус THERMODUL для равномерного и эффективного отопления. Водяные, электрические и комбинированные модели для дома и бизнеса.',
+            'THERMODUL šiltos grindjuostės tolygiam ir efektyviam patalpų šildymui. Vandens, elektriniai ir kombinuoti modeliai namams ir verslui.',
+            'THERMODUL soe põrandaliist ühtlaseks ja tõhusaks kütmiseks. Vee-, elektri- ja kombineeritud mudelid kodudesse ja äripindadele.'
+        ),
+        'type' => 'website',
+    );
+    $pages = array(
+        'par-uznemumu' => array(
+            'title' => thermodul_i18n('Par THERMODUL un AQUADOCK BALTIJA','About THERMODUL and AQUADOCK BALTIJA','О THERMODUL и AQUADOCK BALTIJA','Apie THERMODUL ir AQUADOCK BALTIJA','THERMODUL ja AQUADOCK BALTIJA'),
+            'description' => thermodul_i18n('Uzziniet par THERMODUL grīdlīstes apkures risinājumu, AQUADOCK BALTIJA pieredzi, pielietojumu un sistēmas priekšrocībām.','Learn about the THERMODUL baseboard heating solution, AQUADOCK BALTIJA, applications and system advantages.','Узнайте о системе плинтусного отопления THERMODUL, AQUADOCK BALTIJA, применении и преимуществах решения.','Sužinokite apie THERMODUL grindjuosčių šildymo sprendimą, AQUADOCK BALTIJA, pritaikymą ir sistemos privalumus.','Tutvuge THERMODUL põrandaliistukütte, AQUADOCK BALTIJA, kasutusalade ja süsteemi eelistega.'),
+        ),
+        'sertifikacija' => array(
+            'title' => thermodul_i18n('THERMODUL sertifikācija un standarti','THERMODUL Certification and Standards','Сертификация и стандарты THERMODUL','THERMODUL sertifikavimas ir standartai','THERMODUL sertifikaadid ja standardid'),
+            'description' => thermodul_i18n('THERMODUL kvalitātes, drošības un siltuma atdeves informācija, Eiropas standarti un sertifikācijas materiāli.','THERMODUL quality, safety and heat-output information, European standards and certification materials.','Информация о качестве, безопасности, теплоотдаче, европейских стандартах и сертификационных материалах THERMODUL.','THERMODUL kokybės, saugos, šilumos atidavimo, Europos standartų ir sertifikavimo informacija.','THERMODUL kvaliteedi, ohutuse, soojusvõimsuse, Euroopa standardite ja sertifitseerimise info.'),
+        ),
+        'galerija' => array(
+            'title' => thermodul_i18n('THERMODUL galerija | Realizētie objekti','THERMODUL Gallery | Installed Projects','Галерея THERMODUL | Реализованные объекты','THERMODUL galerija | Įgyvendinti objektai','THERMODUL galerii | Valminud objektid'),
+            'description' => thermodul_i18n('THERMODUL uzstādījumu piemēri mājās, birojos, skolās, restorānos, sabiedriskās un citās telpās.','THERMODUL installation examples in homes, offices, schools, restaurants, public buildings and other spaces.','Примеры установки THERMODUL в домах, офисах, школах, ресторанах, общественных и других помещениях.','THERMODUL montavimo pavyzdžiai namuose, biuruose, mokyklose, restoranuose, viešose ir kitose patalpose.','THERMODUL paigaldusnäited kodudes, kontorites, koolides, restoranides, avalikes hoonetes ja mujal.'),
+            'type' => 'website',
+        ),
+        'kontakti' => array(
+            'title' => thermodul_i18n('THERMODUL kontakti un informācijas pieprasījums','THERMODUL Contacts and Information Request','Контакты THERMODUL и запрос информации','THERMODUL kontaktai ir informacijos užklausa','THERMODUL kontaktid ja infopäring'),
+            'description' => thermodul_i18n('Sazinieties ar THERMODUL / AQUADOCK BALTIJA par grīdlīstes apkures projektu, modeļa izvēli, jaudu un uzstādīšanas risinājumu.','Contact THERMODUL / AQUADOCK BALTIJA about a baseboard heating project, model choice, output and installation.','Свяжитесь с THERMODUL / AQUADOCK BALTIJA по проекту плинтусного отопления, выбору модели, мощности и монтажу.','Susisiekite su THERMODUL / AQUADOCK BALTIJA dėl grindjuosčių šildymo projekto, modelio, galios ir montavimo.','Võtke THERMODUL / AQUADOCK BALTIJA-ga ühendust põrandaliistukütte projekti, mudeli, võimsuse ja paigalduse osas.'),
+            'type' => 'website',
+        ),
+        'udens-modelis' => array(
+            'title' => thermodul_i18n('THERMODUL ūdens modelis | Siltās grīdlīstes','THERMODUL Water Model | Warm Baseboard Heating','Водяная модель THERMODUL | Тёплый плинтус','THERMODUL vandens modelis | Šiltos grindjuostės','THERMODUL veemudel | Soe põrandaliist'),
+            'description' => thermodul_i18n('THERMODUL ūdens modelis katliem, siltumsūkņiem un citām ūdens apkures sistēmām. Piemērots jaunbūvēm, renovācijām un radiatoru nomaiņai.','THERMODUL water model for boilers, heat pumps and other hydronic systems. Suitable for new builds, renovations and radiator replacement.','Водяная модель THERMODUL для котлов, тепловых насосов и других водяных систем. Для новостроек, реконструкции и замены радиаторов.','THERMODUL vandens modelis katilams, šilumos siurbliams ir kitoms vandens sistemoms. Naujai statybai, renovacijai ir radiatorių keitimui.','THERMODUL veemudel kateldele, soojuspumpadele ja muudele vesiküttesüsteemidele. Uusehituseks, renoveerimiseks ja radiaatorite asendamiseks.'),
+            'type' => 'product',
+        ),
+        'elektriskais-modelis' => array(
+            'title' => thermodul_i18n('THERMODUL elektriskais modelis | Siltās grīdlīstes','THERMODUL Electric Model | Warm Baseboard Heating','Электрическая модель THERMODUL | Тёплый плинтус','THERMODUL elektrinis modelis | Šiltos grindjuostės','THERMODUL elektrimudel | Soe põrandaliist'),
+            'description' => thermodul_i18n('THERMODUL elektriskais modelis telpām bez ūdens apkures pieslēguma. Ātra uzstādīšana, termostata vadība un diskrēts grīdlīstes dizains.','THERMODUL electric model for spaces without hydronic heating. Fast installation, thermostat control and discreet baseboard design.','Электрическая модель THERMODUL для помещений без водяного отопления. Быстрый монтаж, управление термостатом и компактный дизайн.','THERMODUL elektrinis modelis patalpoms be vandens šildymo. Greitas montavimas, termostato valdymas ir diskretiškas dizainas.','THERMODUL elektrimudel ruumidesse ilma vesikütteta. Kiire paigaldus, termostaadijuhtimine ja diskreetne disain.'),
+            'type' => 'product',
+        ),
+        'dualais-modelis' => array(
+            'title' => thermodul_i18n('THERMODUL duālais modelis | Ūdens + elektriskā apkure','THERMODUL Dual Model | Water + Electric Heating','Дуальная модель THERMODUL | Вода + электричество','THERMODUL dualinis modelis | Vanduo + elektra','THERMODUL duaalmudel | Vesi + elekter'),
+            'description' => thermodul_i18n('THERMODUL duālais modelis apvieno ūdens un elektrisko apkuri vienā grīdlīstes risinājumā starpsezonai un papildu siltuma rezervei.','THERMODUL dual model combines water and electric heating in one baseboard solution for shoulder seasons and backup heat.','Дуальная модель THERMODUL объединяет водяное и электрическое отопление для межсезонья и резервного обогрева.','THERMODUL dualinis modelis sujungia vandens ir elektrinį šildymą viename sprendime tarpsezoniui ir atsarginiam šildymui.','THERMODUL duaalmudel ühendab vee- ja elektrikütte ühes lahenduses üleminekuperioodiks ja varukütteks.'),
+            'type' => 'product',
+        ),
+        'abpusejais-modelis' => array(
+            'title' => thermodul_i18n('THERMODUL abpusējais modelis | Logiem līdz grīdai','THERMODUL Double-Sided Model | Floor-to-Ceiling Windows','Двусторонняя модель THERMODUL | Окна до пола','THERMODUL dvipusis modelis | Langams iki grindų','THERMODUL kahepoolne mudel | Põrandani aknad'),
+            'description' => thermodul_i18n('Abpusējais THERMODUL modelis logiem līdz grīdai un vietām, kur sistēmu nevar stiprināt pie sienas. Stiprināms pie grīdas, jauda x2.','THERMODUL double-sided model for floor-to-ceiling windows and areas where wall mounting is not possible. Floor mounted with double output.','Двусторонняя модель THERMODUL для окон до пола и мест без настенного монтажа. Крепление к полу и двойная мощность.','Dvipusis THERMODUL modelis langams iki grindų ir vietoms, kur negalimas tvirtinimas prie sienos. Tvirtinamas prie grindų, dviguba galia.','THERMODUL kahepoolne mudel põrandani akendele ja kohtadesse, kus seinakinnitus pole võimalik. Põrandakinnitus ja topeltvõimsus.'),
+            'type' => 'product',
+        ),
+        'dubultais-horizontalais-modelis' => array(
+            'title' => thermodul_i18n('THERMODUL dubultais horizontālais modelis','THERMODUL Double Horizontal Model','Двойная горизонтальная модель THERMODUL','THERMODUL dvigubas horizontalus modelis','THERMODUL topelt horisontaalne mudel'),
+            'description' => thermodul_i18n('Dubultais horizontālais THERMODUL risinājums lielām telpām, skolām, restorāniem, sporta zālēm, baznīcām un citiem objektiem.','THERMODUL double horizontal solution for large rooms, schools, restaurants, sports halls, churches and other projects.','Двойное горизонтальное решение THERMODUL для больших помещений, школ, ресторанов, спортзалов, церквей и других объектов.','THERMODUL dvigubas horizontalus sprendimas didelėms patalpoms, mokykloms, restoranams, sporto salėms ir kitiems objektams.','THERMODUL topelt horisontaalne lahendus suurtesse ruumidesse, koolidesse, restoranidesse, spordisaalidesse ja mujale.'),
+            'type' => 'product',
+        ),
+        'dubultais-vertikalais-modelis' => array(
+            'title' => thermodul_i18n('THERMODUL dubultais vertikālais modelis','THERMODUL Double Vertical Model','Двойная вертикальная модель THERMODUL','THERMODUL dvigubas vertikalus modelis','THERMODUL topelt vertikaalne mudel'),
+            'description' => thermodul_i18n('Dubultais vertikālais THERMODUL modelis lielākai siltuma jaudai, īpaši ziemas dārziem, stiklotām lodžijām un specifiskām zonām.','THERMODUL double vertical model for higher heat output, especially winter gardens, glazed loggias and demanding zones.','Двойная вертикальная модель THERMODUL для повышенной мощности, особенно для зимних садов, остеклённых лоджий и сложных зон.','THERMODUL dvigubas vertikalus modelis didesnei šilumos galiai, ypač žiemos sodams, įstiklintoms lodžijoms ir sudėtingoms zonoms.','THERMODUL topelt vertikaalmudel suurema soojusvõimsuse jaoks, eriti talveaedadesse, klaasitud lodžadele ja nõudlikesse tsoonidesse.'),
+            'type' => 'product',
+        ),
+        'lapas-karte' => array(
+            'title' => thermodul_i18n('THERMODUL lapas karte','THERMODUL Sitemap','Карта сайта THERMODUL','THERMODUL svetainės žemėlapis','THERMODUL saidikaart'),
+            'description' => thermodul_i18n('THERMODUL vietnes sadaļas, modeļi, galerija, sertifikācija un kontaktinformācija.','THERMODUL website sections, models, gallery, certification and contact information.','Разделы сайта THERMODUL, модели, галерея, сертификация и контакты.','THERMODUL svetainės skyriai, modeliai, galerija, sertifikavimas ir kontaktai.','THERMODUL veebisaidi jaotised, mudelid, galerii, sertifikaadid ja kontaktid.'),
+        ),
+    );
+    if ($slug === 'home') { $data = $home; }
+    elseif (isset($pages[$slug])) { $data = $pages[$slug]; }
+    elseif (is_singular()) {
+        $title = wp_strip_all_tags(get_the_title(get_queried_object_id()));
+        $excerpt = get_the_excerpt(get_queried_object_id());
+        if (!$excerpt) { $excerpt = wp_strip_all_tags(get_post_field('post_content', get_queried_object_id())); }
+        $data = array('title' => $title . ' | THERMODUL', 'description' => wp_trim_words($excerpt, 28, ''), 'type' => 'article');
+    } else { return array(); }
+    if (empty($data['type'])) { $data['type'] = 'website'; }
+    if ($slug === 'home') { $data['url'] = thermodul_language_home_url(thermodul_current_lang()); }
+    elseif (is_singular()) { $data['url'] = get_permalink(get_queried_object_id()); }
+    else { $data['url'] = home_url('/'); }
+    $data['image'] = thermodul_remote_img('dzivojama-istaba/dz2.jpg');
+    $model = $slug ? thermodul_model_by_slug($slug) : null;
+    if ($model && !empty($model['img'])) { $data['image'] = $model['img']; }
+    return $data;
+}
+function thermodul_filter_document_title($title) {
+    if (thermodul_has_external_seo_plugin()) { return $title; }
+    $seo = thermodul_seo_data();
+    return !empty($seo['title']) ? $seo['title'] : $title;
+}
+add_filter('pre_get_document_title', 'thermodul_filter_document_title', 20);
+
+function thermodul_wp_robots($robots) {
+    if (is_search() || is_404()) { $robots['noindex'] = true; $robots['follow'] = true; }
+    else { $robots['max-image-preview'] = 'large'; }
+    return $robots;
+}
+add_filter('wp_robots', 'thermodul_wp_robots');
+
+function thermodul_fallback_seo_meta() {
+    if (thermodul_has_external_seo_plugin()) { return; }
+    $seo = thermodul_seo_data();
+    if (empty($seo)) { return; }
+    echo '<meta name="description" content="'.esc_attr($seo['description']).'">' . "\n";
+    echo '<link rel="canonical" href="'.esc_url($seo['url']).'">' . "\n";
+    echo '<meta property="og:type" content="'.esc_attr($seo['type'] === 'article' ? 'article' : 'website').'">' . "\n";
+    echo '<meta property="og:title" content="'.esc_attr($seo['title']).'">' . "\n";
+    echo '<meta property="og:description" content="'.esc_attr($seo['description']).'">' . "\n";
+    echo '<meta property="og:url" content="'.esc_url($seo['url']).'">' . "\n";
+    echo '<meta property="og:image" content="'.esc_url($seo['image']).'">' . "\n";
+    echo '<meta name="twitter:card" content="summary_large_image">' . "\n";
+    echo '<meta name="twitter:title" content="'.esc_attr($seo['title']).'">' . "\n";
+    echo '<meta name="twitter:description" content="'.esc_attr($seo['description']).'">' . "\n";
+    echo '<meta name="twitter:image" content="'.esc_url($seo['image']).'">' . "\n";
+}
+add_action('wp_head', 'thermodul_fallback_seo_meta', 2);
+
+function thermodul_schema_graph() {
+    if (thermodul_has_external_seo_plugin()) { return; }
+    $seo = thermodul_seo_data(); if (empty($seo)) { return; }
+    $org_id = home_url('/#organization');
+    $graph = array(
+        array('@type'=>'Organization','@id'=>$org_id,'name'=>'THERMODUL','url'=>home_url('/'),'email'=>'info@thermodul.eu','telephone'=>'+37129256299','address'=>array('@type'=>'PostalAddress','streetAddress'=>'Dārza iela 17','addressLocality'=>'Ikšķile','postalCode'=>'LV-5052','addressCountry'=>'LV')),
+        array('@type'=>'WebPage','@id'=>$seo['url'].'#webpage','url'=>$seo['url'],'name'=>$seo['title'],'description'=>$seo['description'],'isPartOf'=>array('@id'=>home_url('/#website')),'about'=>array('@id'=>$org_id),'primaryImageOfPage'=>array('@type'=>'ImageObject','url'=>$seo['image'])),
+    );
+    if (is_front_page() || get_query_var('thermodul_onepage')) {
+        $graph[] = array('@type'=>'WebSite','@id'=>home_url('/#website'),'url'=>home_url('/'),'name'=>'THERMODUL','publisher'=>array('@id'=>$org_id),'inLanguage'=>get_bloginfo('language'));
+    }
+    $slug = thermodul_seo_current_slug(); $model = $slug ? thermodul_model_by_slug($slug) : null;
+    if ($model) {
+        $graph[] = array('@type'=>'Product','name'=>$model['title'],'description'=>$model['text'],'image'=>$model['img'],'url'=>$seo['url'],'brand'=>array('@type'=>'Brand','name'=>'THERMODUL'),'manufacturer'=>array('@id'=>$org_id));
+    }
+    echo '<script type="application/ld+json">'.wp_json_encode(array('@context'=>'https://schema.org','@graph'=>$graph), JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE).'</script>' . "\n";
+}
+add_action('wp_head', 'thermodul_schema_graph', 6);
+
+// Fill Yoast output with the migration-safe metadata when Yoast is active.
+function thermodul_yoast_title($value) { $seo=thermodul_seo_data(); return !empty($seo['title']) ? $seo['title'] : $value; }
+function thermodul_yoast_desc($value) { $seo=thermodul_seo_data(); return !empty($seo['description']) ? $seo['description'] : $value; }
+function thermodul_yoast_canonical($value) { $seo=thermodul_seo_data(); return !empty($seo['url']) ? $seo['url'] : $value; }
+function thermodul_yoast_image($value) { $seo=thermodul_seo_data(); return !empty($seo['image']) ? $seo['image'] : $value; }
+add_filter('wpseo_title', 'thermodul_yoast_title', 20);
+add_filter('wpseo_metadesc', 'thermodul_yoast_desc', 20);
+add_filter('wpseo_canonical', 'thermodul_yoast_canonical', 20);
+add_filter('wpseo_opengraph_title', 'thermodul_yoast_title', 20);
+add_filter('wpseo_opengraph_desc', 'thermodul_yoast_desc', 20);
+add_filter('wpseo_opengraph_url', 'thermodul_yoast_canonical', 20);
+add_filter('wpseo_opengraph_image', 'thermodul_yoast_image', 20);
+add_filter('wpseo_twitter_title', 'thermodul_yoast_title', 20);
+add_filter('wpseo_twitter_description', 'thermodul_yoast_desc', 20);
+add_filter('wpseo_twitter_image', 'thermodul_yoast_image', 20);
+
+function thermodul_register_migration_settings() {
+    register_setting('thermodul_seo_analytics', 'thermodul_ga4_id', array('sanitize_callback'=>'sanitize_text_field','default'=>''));
+    register_setting('thermodul_seo_analytics', 'thermodul_gtm_id', array('sanitize_callback'=>'sanitize_text_field','default'=>''));
+    register_setting('thermodul_seo_analytics', 'thermodul_google_site_verification', array('sanitize_callback'=>'sanitize_text_field','default'=>''));
+    register_setting('thermodul_seo_analytics', 'thermodul_bing_site_verification', array('sanitize_callback'=>'sanitize_text_field','default'=>''));
+    register_setting('thermodul_seo_analytics', 'thermodul_redirect_legacy_pages', array('sanitize_callback'=>function($v){return $v ? 1 : 0;},'default'=>0));
+    register_setting('thermodul_performance', 'thermodul_performance_mode', array('sanitize_callback'=>function($v){return $v ? 1 : 0;},'default'=>1));
+    register_setting('thermodul_performance', 'thermodul_cache_ttl', array('sanitize_callback'=>function($v){return max(300,min(86400,(int)$v));},'default'=>3600));
+}
+add_action('admin_init', 'thermodul_register_migration_settings');
+function thermodul_seo_analytics_menu() {
+    add_theme_page('THERMODUL SEO & Analytics', 'THERMODUL SEO & Analytics', 'manage_options', 'thermodul-seo-analytics', 'thermodul_seo_analytics_page');
+}
+add_action('admin_menu', 'thermodul_seo_analytics_menu');
+function thermodul_seo_analytics_page() {
+    if (!current_user_can('manage_options')) { return; }
+    ?>
+    <div class="wrap"><h1>THERMODUL SEO & Analytics</h1>
+    <p>Use a current GA4 Measurement ID (G-...) or a Google Tag Manager container (GTM-...). The old Universal Analytics UA property is intentionally not reused.</p>
+    <form method="post" action="options.php"><?php settings_fields('thermodul_seo_analytics'); ?>
+    <table class="form-table" role="presentation">
+      <tr><th scope="row"><label for="thermodul_ga4_id">GA4 Measurement ID</label></th><td><input class="regular-text" id="thermodul_ga4_id" name="thermodul_ga4_id" value="<?php echo esc_attr(get_option('thermodul_ga4_id','')); ?>" placeholder="G-XXXXXXXXXX"><p class="description">Used only when GTM is empty.</p></td></tr>
+      <tr><th scope="row"><label for="thermodul_gtm_id">Google Tag Manager ID</label></th><td><input class="regular-text" id="thermodul_gtm_id" name="thermodul_gtm_id" value="<?php echo esc_attr(get_option('thermodul_gtm_id','')); ?>" placeholder="GTM-XXXXXXX"></td></tr>
+      <tr><th scope="row"><label for="thermodul_google_site_verification">Google Search Console verification</label></th><td><input class="regular-text" id="thermodul_google_site_verification" name="thermodul_google_site_verification" value="<?php echo esc_attr(get_option('thermodul_google_site_verification','')); ?>"></td></tr>
+      <tr><th scope="row"><label for="thermodul_bing_site_verification">Bing Webmaster verification</label></th><td><input class="regular-text" id="thermodul_bing_site_verification" name="thermodul_bing_site_verification" value="<?php echo esc_attr(get_option('thermodul_bing_site_verification','')); ?>"></td></tr>
+      <tr><th scope="row">Legacy page redirects</th><td><label><input type="checkbox" name="thermodul_redirect_legacy_pages" value="1" <?php checked(1, (int)get_option('thermodul_redirect_legacy_pages',0)); ?>> Redirect old page URLs to homepage sections.</label><p class="description"><strong>Recommended during migration: leave unchecked</strong> so existing indexed URLs keep their own pages and SEO value.</p></td></tr>
+    </table><?php submit_button(); ?></form></div>
+    <?php
+}
+function thermodul_performance_menu() {
+    add_theme_page('THERMODUL Performance', 'THERMODUL Performance', 'manage_options', 'thermodul-performance', 'thermodul_performance_page');
+}
+add_action('admin_menu', 'thermodul_performance_menu');
+function thermodul_performance_page() {
+    if (!current_user_can('manage_options')) { return; }
+    if (isset($_POST['thermodul_clear_cache']) && check_admin_referer('thermodul_clear_cache')) {
+        thermodul_clear_theme_cache();
+        echo '<div class="notice notice-success"><p>THERMODUL cache cleared.</p></div>';
+    }
+    $persistent = wp_using_ext_object_cache();
+    ?>
+    <div class="wrap"><h1>THERMODUL Performance</h1>
+      <p><strong>Persistent object cache:</strong> <?php echo $persistent ? '<span style="color:#138a43">Active</span>' : '<span style="color:#b54708">Not detected - transient fallback is used</span>'; ?></p>
+      <p>The homepage uses server-rendered HTML, local responsive grid CSS, lazy hCaptcha, AVIF images and cached theme data. Full-page caching is intentionally left to the server/cache plugin because the contact form contains nonces.</p>
+      <form method="post" action="options.php"><?php settings_fields('thermodul_performance'); ?>
+        <table class="form-table" role="presentation">
+          <tr><th scope="row">Performance mode</th><td><label><input type="checkbox" name="thermodul_performance_mode" value="1" <?php checked(1,(int)get_option('thermodul_performance_mode',1)); ?>> Optimize the static THERMODUL homepage and use theme data caching.</label></td></tr>
+          <tr><th scope="row"><label for="thermodul_cache_ttl">Theme data cache TTL</label></th><td><input id="thermodul_cache_ttl" name="thermodul_cache_ttl" type="number" min="300" max="86400" step="60" value="<?php echo esc_attr(thermodul_cache_ttl()); ?>"> seconds</td></tr>
+        </table><?php submit_button('Save performance settings'); ?>
+      </form>
+      <form method="post" style="margin-top:18px"><?php wp_nonce_field('thermodul_clear_cache'); ?><input type="hidden" name="thermodul_clear_cache" value="1"><?php submit_button('Clear THERMODUL cache','secondary'); ?></form>
+    </div><?php
+}
+function thermodul_frontend_performance_cleanup() {
+    if (is_admin() || !thermodul_performance_enabled() || !(is_front_page() || get_query_var('thermodul_onepage'))) { return; }
+    foreach (array('thermodul-bootstrap-grid','wp-block-library','wp-block-library-theme','classic-theme-styles','global-styles') as $handle) { wp_dequeue_style($handle); }
+    $wpbb_styles = array('wpbb-bootstrap-full','wpbb-bootstrap-core','wpbb-bootstrap-grid','wpbb-bootstrap-utilities','wpbb-bootstrap-reboot');
+    foreach (array('buttons','forms','nav','navbar','transitions','accordion','dropdown','card','button-group','modal','offcanvas','breadcrumb','pagination','badge','alert','progress','list-group','close','toasts','tooltip','popover','carousel','spinners','placeholders','images','tables','helpers') as $component) { $wpbb_styles[] = 'wpbb-bootstrap-css-' . $component; }
+    foreach ($wpbb_styles as $handle) { wp_dequeue_style($handle); }
+    foreach (array('wpbb-bootstrap-bundle','wpbb-bootstrap-js-collapse','wpbb-bootstrap-js-dropdown','wpbb-bootstrap-js-tab','wpbb-bootstrap-js-modal','wpbb-bootstrap-js-offcanvas','wpbb-bootstrap-js-tooltip','wpbb-bootstrap-js-popover','wpbb-bootstrap-js-toast','wpbb-bootstrap-js-carousel','wpbb-bootstrap-js-alert','wpbb-bootstrap-js-button','wpbb-bootstrap-js-scrollspy') as $handle) { wp_dequeue_script($handle); }
+}
+add_action('wp_enqueue_scripts', 'thermodul_frontend_performance_cleanup', 1000);
+function thermodul_disable_frontend_emoji_assets() {
+    if (!thermodul_performance_enabled()) { return; }
+    remove_action('wp_head', 'print_emoji_detection_script', 7);
+    remove_action('wp_print_styles', 'print_emoji_styles');
+    remove_action('wp_enqueue_scripts', 'wp_enqueue_emoji_styles');
+}
+add_action('init', 'thermodul_disable_frontend_emoji_assets', 20);
+function thermodul_preload_lcp_image() {
+    if (!(is_front_page() || get_query_var('thermodul_onepage'))) { return; }
+    $jpg = thermodul_asset_img('demo/hero-interior.jpg');
+    $avif = thermodul_avif_url_for($jpg);
+    $src = $avif ?: $jpg;
+    echo '<link rel="preload" as="image" href="'.esc_url($src).'"'.($avif ? ' type="image/avif"' : '').' fetchpriority="high">' . "\n";
+}
+add_action('wp_head', 'thermodul_preload_lcp_image', 2);
+
+function thermodul_tracking_head() {
+    $gtm = trim((string)get_option('thermodul_gtm_id',''));
+    $ga4 = trim((string)get_option('thermodul_ga4_id',''));
+    $gsv = trim((string)get_option('thermodul_google_site_verification',''));
+    $bsv = trim((string)get_option('thermodul_bing_site_verification',''));
+    if ($gsv !== '') { echo '<meta name="google-site-verification" content="'.esc_attr($gsv).'">' . "\n"; }
+    if ($bsv !== '') { echo '<meta name="msvalidate.01" content="'.esc_attr($bsv).'">' . "\n"; }
+    if (preg_match('/^GTM-[A-Z0-9]+$/i', $gtm)) {
+        echo "<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','".esc_js($gtm)."');</script>\n";
+    } elseif (preg_match('/^G-[A-Z0-9]+$/i', $ga4)) {
+        echo '<script async src="https://www.googletagmanager.com/gtag/js?id='.esc_attr($ga4).'"></script>' . "\n";
+        echo "<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','".esc_js($ga4)."');</script>\n";
+    }
+}
+add_action('wp_head', 'thermodul_tracking_head', 1);
+function thermodul_tracking_body() {
+    $gtm = trim((string)get_option('thermodul_gtm_id',''));
+    if (preg_match('/^GTM-[A-Z0-9]+$/i', $gtm)) { echo '<noscript><iframe src="https://www.googletagmanager.com/ns.html?id='.esc_attr($gtm).'" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>'; }
+}
+add_action('wp_body_open', 'thermodul_tracking_body', 1);

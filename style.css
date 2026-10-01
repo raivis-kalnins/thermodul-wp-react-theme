@@ -3,7 +3,7 @@ Theme Name: Thermodul React Headless
 Theme URI: https://www.thermodul.eu/
 Author: DigitalPulse / OpenAI
 Description: React-assisted, Bootstrap-grid WordPress theme for THERMODUL silto grīdlīstu apsildes sistēma. Includes Gutenberg/BBuilder-friendly blocks, demo content importer, gallery data from thermodul.eu/galerija, model pages, certification and contacts.
-Version: 3.3.0
+Version: 3.10.4
 Requires at least: 6.0
 Tested up to: 6.6
 Requires PHP: 7.4
@@ -380,3 +380,135 @@ body.td-is-gallery-page .td-page-content{background:#f6f8fb;}
 .td-modal-media img{border-radius:28px 28px 0 0!important;width:100%!important;display:block!important;}
 .td-modal-copy{border-radius:0 0 28px 28px!important;}
 @media(max-width:700px){.td-topbar .td-container{padding-top:9px!important;padding-bottom:9px!important}.td-header-inner{padding-top:7px!important;padding-bottom:7px!important}.td-model-card .td-card-body{padding:16px 20px 14px!important}.td-model-card .td-model-img,.td-model-image-link img{max-height:156px!important;padding:3px 10px!important}.td-modal-card,.td-modal-media,.td-modal-media img{border-radius:22px 22px 0 0!important}.td-modal-card{border-radius:22px!important}.td-modal-copy{border-radius:0 0 22px 22px!important}}
+
+
+/* v3.9.1 migration fidelity: show the exact legacy model artwork clearly */
+.td-model-image-link{height:230px!important;background:#fff!important;display:flex!important;align-items:center!important;justify-content:center!important;overflow:hidden!important;}
+.td-model-card .td-model-img,.td-model-image-link img{width:100%!important;height:100%!important;max-height:220px!important;object-fit:contain!important;object-position:center!important;padding:10px 14px!important;transform:none!important;background:#fff!important;}
+@media(max-width:700px){.td-model-image-link{height:195px!important}.td-model-card .td-model-img,.td-model-image-link img{max-height:185px!important;padding:8px 10px!important}}
+
+
+/* v3.10.1 screenshot alignment polish */
+/* Keep every model card in a row equal-height and pin the CTA to the bottom. */
+.td-models-grid{align-items:stretch!important;}
+.td-models-grid>[class*="col-"]{display:flex!important;align-items:stretch!important;}
+.td-models-grid .td-model-card{width:100%!important;height:100%!important;display:flex!important;flex-direction:column!important;}
+.td-models-grid .td-model-card .td-card-body{display:flex!important;flex:1 1 auto!important;flex-direction:column!important;}
+.td-models-grid .td-model-card .td-card-body p+p{margin-top:8px!important;}
+.td-models-grid .td-model-card .td-link,
+.td-models-grid .td-model-card .td-as-link{margin-top:auto!important;padding-top:16px!important;align-self:flex-start!important;}
+
+/* Article cards: consistent media crop and equal card/body alignment. */
+.td-posts-section .row>[class*="col-"]{display:flex!important;}
+.td-posts-section .td-post-card,.td-posts-section .td-post-trigger{width:100%!important;height:100%!important;}
+.td-posts-section .td-post-trigger{display:flex!important;flex-direction:column!important;text-align:left!important;}
+.td-posts-section .td-post-img{width:100%!important;height:245px!important;object-fit:cover!important;object-position:center!important;}
+.td-posts-section .td-post-content{display:flex!important;flex:1 1 auto!important;flex-direction:column!important;}
+.td-posts-section .td-post-content em{margin-top:auto!important;padding-top:14px!important;}
+
+/* Contact form: align consent checkbox/text and let the native hCaptcha box stand on its own. */
+.td-contact-form .td-consent{display:flex!important;align-items:flex-start!important;gap:10px!important;line-height:1.45!important;margin:14px 0 12px!important;}
+.td-contact-form .td-consent input[type="checkbox"]{flex:0 0 auto!important;width:18px!important;height:18px!important;margin:2px 0 0!important;accent-color:var(--td-red)!important;}
+.td-contact-form .td-hcaptcha-wrap{margin:10px 0 16px!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;overflow:visible!important;gap:0!important;}
+.td-contact-form .td-hcaptcha-wrap .h-captcha{display:block!important;max-width:100%!important;}
+.td-contact-form .td-hcaptcha-note{display:none!important;}
+
+@media(max-width:700px){
+  .td-posts-section .td-post-img{height:210px!important;}
+  .td-contact-form .td-consent{font-size:13px!important;}
+}
+/* v3.10.2 alignment + mobile performance */
+/* Minimal responsive grid for the static THERMODUL front page. This lets the
+   theme avoid loading a second Bootstrap bundle only to use row/column layout. */
+.td-theme .row{--td-gutter-x:1.5rem;--td-gutter-y:0;display:flex;flex-wrap:wrap;margin-top:calc(-1 * var(--td-gutter-y));margin-right:calc(-.5 * var(--td-gutter-x));margin-left:calc(-.5 * var(--td-gutter-x));}
+.td-theme .row>*{box-sizing:border-box;flex-shrink:0;width:100%;max-width:100%;padding-right:calc(var(--td-gutter-x) * .5);padding-left:calc(var(--td-gutter-x) * .5);margin-top:var(--td-gutter-y);}
+.td-theme .g-3{--td-gutter-x:1rem;--td-gutter-y:1rem}.td-theme .g-4{--td-gutter-x:1.5rem;--td-gutter-y:1.5rem}.td-theme .g-5{--td-gutter-x:3rem;--td-gutter-y:3rem}
+.td-theme .align-items-center{align-items:center!important}.td-theme .col-6{flex:0 0 auto;width:50%}
+@media(min-width:768px){.td-theme .col-md-3{flex:0 0 auto;width:25%}.td-theme .col-md-6{flex:0 0 auto;width:50%}}
+@media(min-width:992px){.td-theme .col-lg-4{flex:0 0 auto;width:33.33333333%}.td-theme .col-lg-5{flex:0 0 auto;width:41.66666667%}.td-theme .col-lg-6{flex:0 0 auto;width:50%}.td-theme .col-lg-7{flex:0 0 auto;width:58.33333333%}}
+@media(min-width:1200px){.td-theme .col-xl-4{flex:0 0 auto;width:33.33333333%}}
+
+/* Screenshot fix: true equal-height 3-column product grid and identical CTA baseline. */
+.td-models-grid.row{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:24px!important;margin:0!important;align-items:stretch!important;}
+.td-models-grid.row>[class*="col-"]{width:auto!important;max-width:none!important;flex:none!important;margin:0!important;padding:0!important;display:flex!important;min-width:0!important;align-items:stretch!important;}
+.td-models-grid .td-model-card{width:100%!important;height:100%!important;min-height:0!important;display:flex!important;flex-direction:column!important;}
+.td-models-grid .td-model-image-link{flex:0 0 230px!important;width:100%!important;}
+.td-models-grid .td-model-card .td-card-body{display:flex!important;flex:1 1 auto!important;flex-direction:column!important;min-height:0!important;}
+.td-models-grid .td-model-card .td-card-body .td-link,.td-models-grid .td-model-card .td-card-body .td-as-link{margin-top:auto!important;padding-top:18px!important;align-self:flex-start!important;}
+@media(max-width:991px){.td-models-grid.row{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(max-width:640px){.td-models-grid.row{grid-template-columns:1fr!important;gap:18px!important}.td-models-grid .td-model-image-link{flex-basis:195px!important}}
+
+/* Advice cards: consistent image frame and equal content height. */
+.td-posts-section .row{align-items:stretch!important}.td-posts-section .row>[class*="col-"]{display:flex!important;align-items:stretch!important}.td-posts-section .td-post-card,.td-posts-section .td-post-trigger{width:100%!important;height:100%!important}.td-posts-section .td-post-trigger{display:flex!important;flex-direction:column!important;text-align:left!important}.td-posts-section .td-post-img{width:100%!important;height:245px!important;object-fit:cover!important;object-position:center!important}.td-posts-section .td-post-content{display:flex!important;flex:1 1 auto!important;flex-direction:column!important}.td-posts-section .td-post-content em{margin-top:auto!important;padding-top:14px!important}
+
+/* Screenshot fix: checkbox, consent text and hCaptcha share the same left edge. */
+.td-contact-form .td-consent{display:grid!important;grid-template-columns:18px minmax(0,1fr)!important;align-items:start!important;column-gap:10px!important;line-height:1.45!important;margin:14px 0 12px!important;width:100%!important;}
+.td-contact-form .td-consent input[type="checkbox"]{width:18px!important;height:18px!important;margin:2px 0 0!important;accent-color:var(--td-red)!important;}
+.td-contact-form .td-hcaptcha-wrap{display:flex!important;justify-content:flex-start!important;align-items:flex-start!important;width:100%!important;min-height:78px!important;margin:8px 0 14px!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;overflow:visible!important;gap:0!important;}
+.td-contact-form .td-hcaptcha-wrap .h-captcha{display:block!important;max-width:100%!important;transform-origin:left top!important;}
+.td-contact-form .td-hcaptcha-note{display:none!important;}
+@media(max-width:420px){.td-contact-form .td-hcaptcha-wrap .h-captcha{transform:scale(.88)!important;margin-bottom:-10px!important}.td-contact-form .td-consent{font-size:13px!important}}
+
+/* Let the browser skip painting below-the-fold homepage sections until needed. */
+@supports(content-visibility:auto){.td-react-root>.td-section{content-visibility:auto;contain-intrinsic-size:auto 700px}.td-react-root>.td-section#kapec{contain-intrinsic-size:auto 520px}}
+
+
+/* THERMODUL v3.10.4 regression fixes: exact model art, clean article modal, centered consent */
+.td-contact-form .td-consent{
+  display:flex!important;
+  align-items:center!important;
+  justify-content:flex-start!important;
+  gap:10px!important;
+  width:100%!important;
+  min-height:22px!important;
+  margin:12px 0 16px!important;
+  padding:0!important;
+  line-height:1.35!important;
+}
+.td-contact-form .td-consent input[type="checkbox"]{
+  -webkit-appearance:auto!important;
+  appearance:auto!important;
+  flex:0 0 18px!important;
+  width:18px!important;
+  min-width:18px!important;
+  height:18px!important;
+  padding:0!important;
+  margin:0!important;
+  border-radius:3px!important;
+  box-shadow:none!important;
+  align-self:center!important;
+  accent-color:var(--td-red)!important;
+}
+.td-contact-form .td-consent span{
+  display:block!important;
+  flex:1 1 auto!important;
+  margin:0!important;
+  padding:0!important;
+  line-height:1.35!important;
+}
+.td-modal-card--post .td-modal-media{
+  background:#f6f8fb!important;
+}
+.td-modal-card--post .td-modal-media img{
+  width:100%!important;
+  height:min(380px,38dvh)!important;
+  max-height:380px!important;
+  object-fit:cover!important;
+  object-position:center 58%!important;
+  background:transparent!important;
+}
+.td-modal-card--model .td-modal-media img{
+  object-fit:contain!important;
+  object-position:center!important;
+  background:#fff!important;
+}
+@media(max-width:700px){
+  .td-contact-form .td-consent{align-items:center!important;font-size:13px!important;gap:9px!important}
+  .td-contact-form .td-consent input[type="checkbox"]{flex-basis:17px!important;width:17px!important;min-width:17px!important;height:17px!important}
+  .td-modal-card--post .td-modal-media img{height:220px!important;max-height:220px!important;object-fit:cover!important}
+}
+
+/* THERMODUL v3.10.4: article card media fills the whole card width */
+.td-posts-section .td-post-trigger>picture{display:block!important;width:100%!important;height:245px!important;flex:0 0 245px!important;margin:0!important;padding:0!important;overflow:hidden!important}
+.td-posts-section .td-post-trigger>picture .td-post-img{display:block!important;width:100%!important;max-width:none!important;height:100%!important;margin:0!important;padding:0!important;object-fit:cover!important;object-position:center!important;transform:none!important}
+@media(max-width:700px){.td-posts-section .td-post-trigger>picture{height:220px!important;flex-basis:220px!important}}
