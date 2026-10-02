@@ -4,7 +4,7 @@
   const theme=window.thermodulTheme||{};
   const toggle=$('.td-menu-toggle');
   const menu=$('#td-mobile-menu');
-  if(toggle&&menu){toggle.addEventListener('click',()=>{const open=menu.classList.toggle('is-open');toggle.setAttribute('aria-expanded',open?'true':'false');});}
+  if(toggle&&menu){const openLabel=toggle.getAttribute('aria-label')||'Open menu';const closeLabel={lv:'Aizvērt izvēlni',en:'Close menu',ru:'Закрыть меню',lt:'Uždaryti meniu',et:'Sulge menüü'}[theme.lang]||'Close menu';toggle.addEventListener('click',()=>{const open=menu.classList.toggle('is-open');toggle.setAttribute('aria-expanded',open?'true':'false');toggle.setAttribute('aria-label',open?closeLabel:openLabel);});}
   function initLazy(root=document){const imgs=$$('img[data-src],source[data-srcset]',root);if(!imgs.length)return;const load=(el)=>{if(el.dataset.src){el.src=el.dataset.src;delete el.dataset.src;}if(el.dataset.srcset){el.srcset=el.dataset.srcset;delete el.dataset.srcset;}el.classList.add('is-loaded');};if(!('IntersectionObserver'in window)){imgs.forEach(load);return;}const io=new IntersectionObserver((entries)=>{entries.forEach(e=>{if(e.isIntersecting){load(e.target);io.unobserve(e.target);}});},{rootMargin:'350px 0px'});imgs.forEach(el=>io.observe(el));}
   initLazy();
 
