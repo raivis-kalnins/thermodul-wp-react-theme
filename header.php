@@ -23,7 +23,10 @@
             <?php thermodul_brand(); ?>
             <nav class="td-nav" aria-label="<?php esc_attr_e('Galvenā izvēlne','thermodul'); ?>"><?php thermodul_nav('primary'); ?></nav>
             <div class="td-header-tools"><button class="td-search-toggle" id="tdSearchToggle" type="button" aria-expanded="false" aria-controls="tdSearchPanel"><?php echo esc_html(thermodul_i18n('Meklēt','Search','Поиск','Ieškoti','Otsi')); ?></button><div class="td-header-cta"><a class="td-btn" href="<?php echo esc_url(thermodul_anchor_url('pieprasijums')); ?>"><?php echo esc_html(thermodul_i18n('Pieprasīt informāciju','Request information','Запросить информацию','Prašyti informacijos','Küsi infot')); ?></a></div></div>
-            <button class="td-menu-toggle" type="button" aria-expanded="false" aria-controls="td-mobile-menu">☰</button>
+            <button class="td-menu-toggle" type="button" aria-expanded="false" aria-controls="td-mobile-menu" aria-label="<?php echo esc_attr(thermodul_i18n('Atvērt izvēlni','Open menu','Открыть меню','Atidaryti meniu','Ava menüü')); ?>">
+                <span class="td-menu-icon td-menu-icon-open" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/></svg></span>
+                <span class="td-menu-icon td-menu-icon-close" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+            </button>
         </div>
         <div id="tdSearchPanel" class="td-search-panel td-container"><?php echo do_shortcode('[thermodul_ajax_search]'); ?></div>
         <div id="td-mobile-menu" class="td-mobile-menu td-container"><?php thermodul_nav('primary'); ?><?php thermodul_language_switcher('td-lang-switch td-mobile-lang'); ?><?php echo do_shortcode('[thermodul_ajax_search]'); ?></div>

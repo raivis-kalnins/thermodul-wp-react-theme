@@ -1,7 +1,7 @@
 <?php
 if (!defined('ABSPATH')) { exit; }
 
-define('THERMODUL_THEME_VERSION', '3.10.4');
+define('THERMODUL_THEME_VERSION', '3.10.5');
 
 function thermodul_setup() {
     load_theme_textdomain('thermodul', get_template_directory() . '/languages');
